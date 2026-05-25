@@ -60,6 +60,7 @@ export default function Home() {
     () => conversations.find((conversation) => conversation.id === selectedId),
     [conversations, selectedId]
   );
+  const firstJoinRequest = joinRequests[0] ?? null;
 
   const loadConversations = useCallback(async () => {
     const response = await apiClient.listConversations();
@@ -106,6 +107,16 @@ export default function Home() {
     const interval = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      void loadPendingJoinRequests().catch((caught: Error) =>
+        setError(caught.message)
+      );
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [loadPendingJoinRequests]);
 
   useEffect(() => {
     const socket = new WebSocket(wsUrl());
@@ -271,7 +282,7 @@ export default function Home() {
             >
               <span>{conversation.title}</span>
               <small>
-                {formatTime(conversation.lastMessageAt)} · {conversation.agentCount} agents
+                {formatTime(conversation.lastMessageAt)} / {conversation.agentCount} agents
               </small>
             </button>
           ))}
@@ -297,6 +308,42 @@ export default function Home() {
             <button onClick={() => setError(null)} title="Dismiss" aria-label="Dismiss error">
               <X size={16} />
             </button>
+          </div>
+        ) : null}
+
+        {firstJoinRequest ? (
+          <div className="join-banner">
+            <div>
+              <strong>
+                {joinRequests.length === 1
+                  ? "Agent join request"
+                  : `${joinRequests.length} agent join requests`}
+              </strong>
+              <span>
+                {firstJoinRequest.agent.name} wants to join{" "}
+                {firstJoinRequest.conversation.title} as{" "}
+                {firstJoinRequest.requestedRole}
+              </span>
+            </div>
+            <div className="join-banner-actions">
+              <span>{secondsLeft(firstJoinRequest.expiresAt, now)}s</span>
+              <button
+                className="accept"
+                onClick={() => void accept(firstJoinRequest)}
+                title="Accept join request"
+                aria-label="Accept join request"
+              >
+                <Check size={16} />
+              </button>
+              <button
+                className="reject"
+                onClick={() => void reject(firstJoinRequest)}
+                title="Reject join request"
+                aria-label="Reject join request"
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
         ) : null}
 
@@ -353,7 +400,7 @@ export default function Home() {
               <div className="agent-row" key={membership.id}>
                 <div>
                   <strong>{membership.agent.name}</strong>
-                  <span>{membership.agent.provider} · {membership.role}</span>
+                  <span>{membership.agent.provider} / {membership.role}</span>
                 </div>
                 <em>{membership.status}</em>
               </div>
@@ -372,7 +419,7 @@ export default function Home() {
               <div className="request-card" key={request.id}>
                 <div className="request-main">
                   <strong>{request.agent.name}</strong>
-                  <span>{request.agent.provider} · {request.requestedRole}</span>
+                  <span>{request.agent.provider} / {request.requestedRole}</span>
                   <span>{request.conversation.title}</span>
                   {request.reason ? <p>{request.reason}</p> : null}
                 </div>

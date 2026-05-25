@@ -235,6 +235,67 @@ textarea:focus {
   font-size: 14px;
 }
 
+.join-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 16px 24px 0;
+  padding: 12px 14px;
+  border: 1px solid #99f6e4;
+  border-radius: 8px;
+  background: #f0fdfa;
+  color: var(--ink);
+  box-shadow: 0 10px 24px rgba(15, 118, 110, 0.08);
+}
+
+.join-banner div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.join-banner strong {
+  font-size: 14px;
+}
+
+.join-banner span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.join-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: max-content;
+}
+
+.join-banner-actions > span {
+  color: var(--amber);
+  font-weight: 800;
+}
+
+.join-banner-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+}
+
+.join-banner-actions .accept {
+  background: var(--teal);
+  color: white;
+}
+
+.join-banner-actions .reject {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .error-banner button {
   width: 28px;
   height: 28px;
@@ -493,5 +554,10 @@ button:disabled {
 
   .message {
     max-width: 100%;
+  }
+
+  .join-banner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
