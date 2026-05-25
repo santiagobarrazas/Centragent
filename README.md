@@ -66,16 +66,49 @@ pnpm typecheck
 
 Embeddings are optional. With `EMBEDDING_PROVIDER=disabled`, messages still store in PostgreSQL and realtime still works; semantic search returns an empty result set with `embeddingConfigured: false`.
 
+Centragent uses one embedding interface across providers. Message indexing is embedded as a retrieval document, while semantic-search queries are embedded as retrieval queries. This matters most for Google, whose embedding APIs use task types such as `RETRIEVAL_DOCUMENT` and `RETRIEVAL_QUERY` to optimize vectors for search.
+
 To enable Ollama embeddings:
 
 ```env
 EMBEDDING_PROVIDER=ollama
+EMBEDDING_DIMENSIONS=768
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-EMBEDDING_DIMENSIONS=768
 ```
 
-The API creates the `centragent_memory` Qdrant collection lazily on the first indexed message or semantic search. Qdrant point IDs are deterministic UUIDv5 values derived from natural keys such as `message:{messageId}:chunk:0`, because Qdrant point IDs must be UUID-compatible.
+To enable OpenAI embeddings:
+
+```env
+EMBEDDING_PROVIDER=openai
+EMBEDDING_DIMENSIONS=768
+OPENAI_API_KEY=sk-...
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+
+OpenAI `text-embedding-3` models support the `dimensions` parameter, so Centragent passes `EMBEDDING_DIMENSIONS` for those models. The OpenAI defaults are 1536 dimensions for `text-embedding-3-small` and 3072 for `text-embedding-3-large`; using 768 keeps the local Qdrant collection smaller and lines up with the default local Ollama path.
+
+To enable Google Gemini Developer API embeddings:
+
+```env
+EMBEDDING_PROVIDER=google
+EMBEDDING_DIMENSIONS=768
+GEMINI_API_KEY=...
+GOOGLE_EMBEDDING_MODEL=gemini-embedding-001
+GOOGLE_GENERATIVE_LANGUAGE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+```
+
+Google `gemini-embedding-001` defaults to 3072 dimensions, but Google recommends 768, 1536, or 3072 for Matryoshka-style truncation. Centragent uses `EMBEDDING_DIMENSIONS` as `outputDimensionality` and maps stored messages to `RETRIEVAL_DOCUMENT` and search text to `RETRIEVAL_QUERY`.
+
+The API creates the `centragent_memory` Qdrant collection lazily on the first indexed message or semantic search. Keep `EMBEDDING_DIMENSIONS` stable for an existing Qdrant collection; if you change providers or dimensions, recreate the local collection or use a new `QDRANT_COLLECTION`. Qdrant point IDs are deterministic UUIDv5 values derived from natural keys such as `message:{messageId}:chunk:0`, because Qdrant point IDs must be UUID-compatible.
+
+Provider references:
+
+- OpenAI embeddings guide: https://platform.openai.com/docs/guides/embeddings
+- OpenAI embeddings API reference: https://platform.openai.com/docs/api-reference/embeddings
+- Google Gemini embeddings guide: https://ai.google.dev/gemini-api/docs/embeddings
+- Google Gemini embeddings API reference: https://ai.google.dev/api/embeddings
 
 ## Join Request Flow
 

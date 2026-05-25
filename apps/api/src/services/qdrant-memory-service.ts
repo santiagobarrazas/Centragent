@@ -28,7 +28,9 @@ export class QdrantMemoryService {
   }
 
   async indexMessage(message: Message) {
-    const vector = await this.embeddings.embed(message.content);
+    const vector = await this.embeddings.embed(message.content, {
+      purpose: "document"
+    });
     if (!vector) {
       return { indexed: false, reason: "embeddings_not_configured" };
     }
@@ -99,7 +101,9 @@ export class QdrantMemoryService {
   }
 
   async search(input: SemanticSearchInput) {
-    const vector = await this.embeddings.embed(input.query);
+    const vector = await this.embeddings.embed(input.query, {
+      purpose: "query"
+    });
     if (!vector) {
       return { results: [], embeddingConfigured: false };
     }

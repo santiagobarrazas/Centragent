@@ -20,9 +20,23 @@ const envSchema = z.object({
   MASTER_USER_NAME: z.string().default("Local Master"),
   API_HOST: z.string().default("127.0.0.1"),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
-  EMBEDDING_PROVIDER: z.enum(["disabled", "ollama", "env"]).default("disabled"),
+  EMBEDDING_PROVIDER: z
+    .enum(["disabled", "ollama", "openai", "google", "env"])
+    .default("disabled"),
   OLLAMA_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   OLLAMA_EMBEDDING_MODEL: z.string().default("nomic-embed-text"),
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
+  OPENAI_EMBEDDING_MODEL: z.string().default("text-embedding-3-small"),
+  OPENAI_ORGANIZATION: z.string().optional(),
+  OPENAI_PROJECT: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  GOOGLE_API_KEY: z.string().optional(),
+  GOOGLE_GENERATIVE_LANGUAGE_BASE_URL: z
+    .string()
+    .url()
+    .default("https://generativelanguage.googleapis.com/v1beta"),
+  GOOGLE_EMBEDDING_MODEL: z.string().default("gemini-embedding-001"),
   EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).default(768)
 });
 
