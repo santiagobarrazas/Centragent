@@ -41,6 +41,7 @@ type McpInstallResult = {
 };
 
 const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
+const isWindows = process.platform === "win32";
 
 async function main() {
   await ensureEnvFile();
@@ -702,7 +703,7 @@ async function runStep(label: string, command: string, args: string[]) {
     const child = spawn(command, args, {
       cwd: rootDir,
       stdio: "inherit",
-      shell: false
+      shell: isWindows
     });
 
     child.on("error", reject);
@@ -763,7 +764,7 @@ function startProcess(label: string, args: string[]) {
   const child = spawn(corepackCommand, args, {
     cwd: rootDir,
     env: process.env,
-    shell: false
+    shell: isWindows
   });
 
   prefixStream(label, child.stdout);
