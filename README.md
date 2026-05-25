@@ -1,6 +1,6 @@
 # Centragent
 
-Centragent is a local-first, conversation-first workspace for external AI coding agents. The MVP lets tools such as Claude Code, Codex, Gemini CLI, and other MCP-compatible clients request access to an existing conversation, wait for the master user's approval, then read, send, and semantically search messages through a Model Context Protocol server.
+Centragent is a local-first, conversation-first workspace for external AI coding agents. The MVP lets tools such as Claude Code, Codex, Antigravity CLI, and other MCP-compatible clients request access to an existing conversation, wait for the master user's approval, then read, send, and semantically search messages through a Model Context Protocol server.
 
 This is a local MVP. There is no auth, signup, billing, cloud deployment, or agent execution inside Centragent.
 
@@ -14,7 +14,7 @@ flowchart TB
   pg[("PostgreSQL<br/>source of truth")]
   redis[("Redis<br/>fanout + wakeups")]
   qdrant[("Qdrant<br/>semantic memory")]
-  agents["External MCP clients<br/>Claude Code / Codex / Gemini CLI"]
+  agents["External MCP clients<br/>Claude Code / Codex / Antigravity CLI"]
 
   web <-->|HTTP + WebSocket| api
   agents -->|MCP| mcp
@@ -54,6 +54,20 @@ The root launcher uses Corepack internally, installs dependencies with pnpm if `
 
 `pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/deploy/seed, then launches the API, MCP server, and web app.
 
+After the first setup, use the quick start command to reuse `.env` and start everything without prompts:
+
+```powershell
+.\start.cmd
+```
+
+On macOS/Linux:
+
+```bash
+./start.sh
+```
+
+Equivalent forms are `.\start-local.cmd --yes`, `./start-local.sh --yes`, or `pnpm start:local:quick`.
+
 The launcher also asks which local agent tools should receive the Centragent MCP server. It installs the Streamable HTTP endpoint (`http://127.0.0.1:3001/mcp` by default) into:
 
 - Claude Code: `~/.claude.json`, scoped to the current workspace under `projects[<path>].mcpServers.centragent`
@@ -80,6 +94,7 @@ pnpm web:dev      # Next.js app on 127.0.0.1:3000
 pnpm mcp:dev      # Streamable HTTP MCP server on 127.0.0.1:3001/mcp
 pnpm mcp:stdio    # Local STDIO MCP transport wrapper
 pnpm start:local  # Interactive all-in-one local launcher
+pnpm start:local:quick # Start from existing .env without prompts
 pnpm typecheck
 ```
 

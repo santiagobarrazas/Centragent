@@ -13,4 +13,11 @@ if [ ! -d "node_modules" ]; then
   corepack pnpm install
 fi
 
-corepack pnpm start:local
+case "${1:-}" in
+  --yes|--no-interactive)
+    corepack pnpm start:local:quick
+    ;;
+  *)
+    corepack pnpm start:local
+    ;;
+esac

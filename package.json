@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "corepack pnpm --parallel --filter @centragent/api --filter @centragent/mcp --filter @centragent/web dev",
     "start:local": "tsx scripts/start-local.ts",
+    "start:local:quick": "tsx scripts/start-local.ts --yes",
     "local:dev": "tsx scripts/start-local.ts",
     "api:dev": "corepack pnpm --filter @centragent/api dev",
     "mcp:dev": "corepack pnpm --filter @centragent/mcp dev",

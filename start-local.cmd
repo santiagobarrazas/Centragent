@@ -15,5 +15,15 @@ if not exist "node_modules" (
   if errorlevel 1 exit /b %errorlevel%
 )
 
+if /I "%~1"=="--yes" (
+  corepack.cmd pnpm start:local:quick
+  exit /b %errorlevel%
+)
+
+if /I "%~1"=="--no-interactive" (
+  corepack.cmd pnpm start:local:quick
+  exit /b %errorlevel%
+)
+
 corepack.cmd pnpm start:local
 exit /b %errorlevel%

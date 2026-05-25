@@ -42,10 +42,19 @@ type McpInstallResult = {
 
 const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
 const isWindows = process.platform === "win32";
+const quickStart = process.argv.includes("--yes") || process.argv.includes("--no-interactive");
 
 async function main() {
   await ensureEnvFile();
   const env = parseEnvFile(await fs.readFile(envPath, "utf8"));
+
+  if (quickStart) {
+    printQuickStart(env);
+    await runSetupCommands();
+    await startDevProcesses();
+    return;
+  }
+
   const rl = createInterface({ input: process.stdin, output: process.stdout });
 
   try {
@@ -190,6 +199,14 @@ function quoteEnvValue(value: string) {
 function printHeader() {
   console.log("\nCentragent local launcher");
   console.log("This configures embeddings, starts Docker infrastructure, runs migrations, and launches API/MCP/web.\n");
+}
+
+function printQuickStart(env: EnvMap) {
+  console.log("\nCentragent quick start");
+  console.log("Using existing .env without prompts.");
+  console.log(`  Provider: ${env.EMBEDDING_PROVIDER || "disabled"}`);
+  console.log(`  Dimensions: ${env.EMBEDDING_DIMENSIONS || "not set"}`);
+  console.log(`  Qdrant collection: ${env.QDRANT_COLLECTION || "centragent_memory"}`);
 }
 
 async function chooseMcpTargets(rl: ReturnType<typeof createInterface>) {
@@ -703,7 +720,7 @@ async function runStep(label: string, command: string, args: string[]) {
     const child = spawn(command, args, {
       cwd: rootDir,
       stdio: "inherit",
-      shell: isWindows
+      shell: shouldUseWindowsShell(command)
     });
 
     child.on("error", reject);
@@ -711,7 +728,11 @@ async function runStep(label: string, command: string, args: string[]) {
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`${label} failed with exit code ${code ?? "unknown"}`));
+        const prefix =
+          command === "docker"
+            ? "Docker step failed. Make sure Docker Desktop is running and this terminal can access the Docker engine."
+            : label;
+        reject(new Error(`${prefix} Exit code ${code ?? "unknown"}.`));
       }
     });
   });
@@ -764,7 +785,7 @@ function startProcess(label: string, args: string[]) {
   const child = spawn(corepackCommand, args, {
     cwd: rootDir,
     env: process.env,
-    shell: isWindows
+    shell: shouldUseWindowsShell(corepackCommand)
   });
 
   prefixStream(label, child.stdout);
@@ -775,6 +796,10 @@ function startProcess(label: string, args: string[]) {
   });
 
   return child;
+}
+
+function shouldUseWindowsShell(command: string) {
+  return isWindows && /\.(cmd|bat)$/i.test(command);
 }
 
 function prefixStream(
