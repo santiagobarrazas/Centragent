@@ -2,7 +2,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import { z } from "zod";
-import { DEFAULT_MASTER_USER_ID } from "@centragent/shared";
+import {
+  DEFAULT_MASTER_USER_ID,
+  EMBEDDING_PROVIDER_IDS
+} from "@centragent/shared";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,7 +24,7 @@ const envSchema = z.object({
   API_HOST: z.string().default("127.0.0.1"),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   EMBEDDING_PROVIDER: z
-    .enum(["disabled", "ollama", "openai", "google", "env"])
+    .enum(EMBEDDING_PROVIDER_IDS)
     .default("disabled"),
   OLLAMA_BASE_URL: z.string().url().default("http://127.0.0.1:11434"),
   OLLAMA_EMBEDDING_MODEL: z.string().default("nomic-embed-text"),
@@ -37,7 +40,7 @@ const envSchema = z.object({
     .url()
     .default("https://generativelanguage.googleapis.com/v1beta"),
   GOOGLE_EMBEDDING_MODEL: z.string().default("gemini-embedding-001"),
-  EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).default(768)
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().min(1).optional()
 });
 
 export const config = envSchema.parse(process.env);

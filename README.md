@@ -43,14 +43,22 @@ PostgreSQL stores canonical users, conversations, agents, join requests, message
 corepack enable
 pnpm install
 cp .env.example .env
+pnpm start:local
+```
+
+If `pnpm` is not on PATH yet, use `corepack pnpm ...` for the same commands.
+
+`pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/migrate/seed, then launches the API, MCP server, and web app.
+
+Manual startup is still available:
+
+```bash
 docker compose up -d
 pnpm db:generate
 pnpm db:migrate
 pnpm db:seed
 pnpm dev
 ```
-
-If `pnpm` is not on PATH yet, use `corepack pnpm ...` for the same commands.
 
 Useful scripts:
 
@@ -59,6 +67,7 @@ pnpm api:dev      # Fastify API on 127.0.0.1:4000
 pnpm web:dev      # Next.js app on 127.0.0.1:3000
 pnpm mcp:dev      # Streamable HTTP MCP server on 127.0.0.1:3001/mcp
 pnpm mcp:stdio    # Local STDIO MCP transport wrapper
+pnpm start:local  # Interactive all-in-one local launcher
 pnpm typecheck
 ```
 
@@ -101,7 +110,7 @@ GOOGLE_GENERATIVE_LANGUAGE_BASE_URL=https://generativelanguage.googleapis.com/v1
 
 Google `gemini-embedding-001` defaults to 3072 dimensions, but Google recommends 768, 1536, or 3072 for Matryoshka-style truncation. Centragent uses `EMBEDDING_DIMENSIONS` as `outputDimensionality` and maps stored messages to `RETRIEVAL_DOCUMENT` and search text to `RETRIEVAL_QUERY`.
 
-The API creates the `centragent_memory` Qdrant collection lazily on the first indexed message or semantic search. Keep `EMBEDDING_DIMENSIONS` stable for an existing Qdrant collection; if you change providers or dimensions, recreate the local collection or use a new `QDRANT_COLLECTION`. Qdrant point IDs are deterministic UUIDv5 values derived from natural keys such as `message:{messageId}:chunk:0`, because Qdrant point IDs must be UUID-compatible.
+The API creates the selected Qdrant collection lazily on the first indexed message or semantic search. Keep `EMBEDDING_DIMENSIONS` stable for an existing Qdrant collection; if you change providers or dimensions, recreate the local collection or use a new `QDRANT_COLLECTION`. The local launcher handles this by deriving collection names like `centragent_memory_openai_text_embedding_3_small_1536` from the same shared registry the API uses. Qdrant point IDs are deterministic UUIDv5 values derived from natural keys such as `message:{messageId}:chunk:0`, because Qdrant point IDs must be UUID-compatible.
 
 Provider references:
 

@@ -1,4 +1,9 @@
 import type { FastifyBaseLogger } from "fastify";
+import {
+  getDefaultEmbeddingModel,
+  getEmbeddingModelDefinition,
+  type EmbeddingProvider
+} from "@centragent/shared";
 import type { AppConfig } from "../config.js";
 
 export type EmbeddingPurpose = "document" | "query";
@@ -36,7 +41,12 @@ export class EmbeddingService {
   }
 
   dimensions() {
-    return this.config.EMBEDDING_DIMENSIONS;
+    return (
+      this.config.EMBEDDING_DIMENSIONS ??
+      this.configuredModelDefinition()?.nativeDimensions ??
+      this.defaultModelDefinition()?.nativeDimensions ??
+      768
+    );
   }
 
   async embed(text: string, options: EmbedOptions): Promise<number[] | null> {
@@ -140,7 +150,7 @@ export class EmbeddingService {
     };
 
     if (this.openAiModelSupportsDimensions(model)) {
-      body.dimensions = this.config.EMBEDDING_DIMENSIONS;
+      body.dimensions = this.dimensions();
     }
 
     try {
@@ -203,7 +213,7 @@ export class EmbeddingService {
               parts: [{ text }]
             },
             taskType,
-            outputDimensionality: this.config.EMBEDDING_DIMENSIONS
+            outputDimensionality: this.dimensions()
           })
         }
       );
@@ -229,7 +239,10 @@ export class EmbeddingService {
   }
 
   private openAiModelSupportsDimensions(model: string) {
-    return model.startsWith("text-embedding-3");
+    return (
+      this.configuredModelDefinition()?.supportsDimensionOverride ??
+      model.startsWith("text-embedding-3")
+    );
   }
 
   private warnOnce(key: string, message: string) {
@@ -266,5 +279,32 @@ export class EmbeddingService {
         "EMBEDDING_PROVIDER=env is reserved for later provider wiring; embeddings disabled"
       );
     }
+  }
+
+  private configuredModelDefinition() {
+    const provider = this.config.EMBEDDING_PROVIDER as EmbeddingProvider;
+
+    if (provider === "disabled" || provider === "env") {
+      return undefined;
+    }
+
+    const configuredModel =
+      provider === "ollama"
+        ? this.config.OLLAMA_EMBEDDING_MODEL
+        : provider === "openai"
+          ? this.config.OPENAI_EMBEDDING_MODEL
+          : this.config.GOOGLE_EMBEDDING_MODEL;
+
+    return getEmbeddingModelDefinition(provider, configuredModel);
+  }
+
+  private defaultModelDefinition() {
+    const provider = this.config.EMBEDDING_PROVIDER as EmbeddingProvider;
+
+    if (provider === "disabled" || provider === "env") {
+      return undefined;
+    }
+
+    return getDefaultEmbeddingModel(provider);
   }
 }
