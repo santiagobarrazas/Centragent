@@ -1,0 +1,192 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @db.Uuid
+  name          String
+  email         String?
+  createdAt     DateTime       @default(now()) @map("created_at")
+  conversations Conversation[]
+  agents        Agent[]
+
+  @@map("users")
+}
+
+model Conversation {
+  id            String              @id @default(uuid()) @db.Uuid
+  ownerId       String              @map("owner_id") @db.Uuid
+  title         String
+  createdAt     DateTime            @default(now()) @map("created_at")
+  updatedAt     DateTime            @updatedAt @map("updated_at")
+  lastMessageAt DateTime?           @map("last_message_at")
+  owner         User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  agents        ConversationAgent[]
+  joinRequests  JoinRequest[]
+  messages      Message[]
+  runs          Run[]
+  qdrantMemory  QdrantMemory[]
+
+  @@index([ownerId])
+  @@index([lastMessageAt])
+  @@map("conversations")
+}
+
+model Agent {
+  id                 String              @id @default(uuid()) @db.Uuid
+  ownerId            String?             @map("owner_id") @db.Uuid
+  name               String
+  provider           String
+  clientInstanceId   String?             @map("client_instance_id")
+  config             Json                @default("{}")
+  createdAt          DateTime            @default(now()) @map("created_at")
+  updatedAt          DateTime            @updatedAt @map("updated_at")
+  owner              User?               @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  conversationAgents ConversationAgent[]
+  joinRequests       JoinRequest[]
+  runs               Run[]
+  qdrantMemory       QdrantMemory[]
+
+  @@index([ownerId])
+  @@index([provider, clientInstanceId, name])
+  @@map("agents")
+}
+
+model ConversationAgent {
+  id            String         @id @default(uuid()) @db.Uuid
+  conversationId String        @map("conversation_id") @db.Uuid
+  agentId       String         @map("agent_id") @db.Uuid
+  role          String
+  status        String
+  joinedAt      DateTime?      @map("joined_at")
+  leftAt        DateTime?      @map("left_at")
+  metadata      Json           @default("{}")
+  createdAt     DateTime       @default(now()) @map("created_at")
+  updatedAt     DateTime       @updatedAt @map("updated_at")
+  conversation  Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent         Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages      Message[]
+  runs          Run[]
+  qdrantMemory  QdrantMemory[]
+
+  @@unique([conversationId, agentId])
+  @@index([agentId])
+  @@index([conversationId, status])
+  @@map("conversation_agents")
+}
+
+model JoinRequest {
+  id            String       @id @default(uuid()) @db.Uuid
+  conversationId String      @map("conversation_id") @db.Uuid
+  agentId       String       @map("agent_id") @db.Uuid
+  requestedRole String       @map("requested_role")
+  status        String
+  reason        String?
+  expiresAt     DateTime     @map("expires_at")
+  respondedAt   DateTime?    @map("responded_at")
+  metadata      Json         @default("{}")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+  conversation  Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  agent         Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, status])
+  @@index([agentId])
+  @@index([status, expiresAt])
+  @@map("join_requests")
+}
+
+model Message {
+  id                   String             @id @default(uuid()) @db.Uuid
+  conversationId       String             @map("conversation_id") @db.Uuid
+  senderType           String             @map("sender_type")
+  senderId             String?            @map("sender_id") @db.Uuid
+  conversationAgentId  String?            @map("conversation_agent_id") @db.Uuid
+  role                 String
+  status               String
+  content              String
+  sequenceNumber       Int                @map("sequence_number")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  metadata             Json               @default("{}")
+  conversation         Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationAgent    ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+  userMessageRuns      Run[]              @relation("RunUserMessage")
+  assistantMessageRuns Run[]              @relation("RunAssistantMessage")
+  qdrantMemory         QdrantMemory[]
+
+  @@unique([conversationId, sequenceNumber])
+  @@index([conversationId, createdAt])
+  @@index([conversationAgentId])
+  @@map("messages")
+}
+
+model Run {
+  id                   String             @id @default(uuid()) @db.Uuid
+  conversationId       String             @map("conversation_id") @db.Uuid
+  conversationAgentId  String?            @map("conversation_agent_id") @db.Uuid
+  agentId              String?            @map("agent_id") @db.Uuid
+  userMessageId        String?            @map("user_message_id") @db.Uuid
+  assistantMessageId   String?            @map("assistant_message_id") @db.Uuid
+  status               String
+  startedAt            DateTime?          @map("started_at")
+  completedAt          DateTime?          @map("completed_at")
+  metadata             Json               @default("{}")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  conversation         Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationAgent    ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+  agent                Agent?             @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  userMessage          Message?           @relation("RunUserMessage", fields: [userMessageId], references: [id], onDelete: SetNull)
+  assistantMessage     Message?           @relation("RunAssistantMessage", fields: [assistantMessageId], references: [id], onDelete: SetNull)
+  events               RunEvent[]
+  qdrantMemory         QdrantMemory[]
+
+  @@index([conversationId])
+  @@index([conversationAgentId])
+  @@index([agentId])
+  @@map("runs")
+}
+
+model RunEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  runId          String   @map("run_id") @db.Uuid
+  type           String
+  data           Json     @default("{}")
+  sequenceNumber Int      @map("sequence_number")
+  createdAt      DateTime @default(now()) @map("created_at")
+  run            Run      @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequenceNumber])
+  @@index([runId])
+  @@map("run_events")
+}
+
+model QdrantMemory {
+  pointId              String             @id @map("point_id")
+  conversationId       String?            @map("conversation_id") @db.Uuid
+  agentId              String?            @map("agent_id") @db.Uuid
+  conversationAgentId  String?            @map("conversation_agent_id") @db.Uuid
+  messageId            String?            @map("message_id") @db.Uuid
+  runId                String?            @map("run_id") @db.Uuid
+  scopeType            String             @map("scope_type")
+  scopeId              String?            @map("scope_id") @db.Uuid
+  content              String
+  metadata             Json               @default("{}")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  conversation         Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  agent                Agent?             @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  conversationAgent    ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+  message              Message?           @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  run                  Run?               @relation(fields: [runId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId])
+  @@index([agentId])
+  @@index([messageId])
+  @@index([runId])
+  @@map("qdrant_memory")
+}

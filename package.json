@@ -1,0 +1,23 @@
+{
+  "name": "centragent",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "scripts": {
+    "dev": "corepack pnpm --parallel --filter @centragent/api --filter @centragent/mcp --filter @centragent/web dev",
+    "api:dev": "corepack pnpm --filter @centragent/api dev",
+    "mcp:dev": "corepack pnpm --filter @centragent/mcp dev",
+    "mcp:stdio": "corepack pnpm --filter @centragent/mcp stdio",
+    "web:dev": "corepack pnpm --filter @centragent/web dev",
+    "db:generate": "corepack pnpm --filter @centragent/db db:generate",
+    "db:migrate": "corepack pnpm --filter @centragent/db db:migrate",
+    "db:seed": "corepack pnpm --filter @centragent/db db:seed",
+    "typecheck": "corepack pnpm -r typecheck",
+    "lint": "corepack pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
+  }
+}
