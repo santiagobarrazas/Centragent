@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import {
@@ -19,6 +20,7 @@ type ActiveEmbeddingProvider = Exclude<EmbeddingProvider, "disabled" | "env">;
 const rootDir = process.cwd();
 const envPath = path.join(rootDir, ".env");
 const envExamplePath = path.join(rootDir, ".env.example");
+const mcpServerName = "centragent";
 
 type EnvMap = Record<string, string>;
 
@@ -26,6 +28,16 @@ type Choice<TValue> = {
   label: string;
   description?: string;
   value: TValue;
+};
+
+type McpToolTarget = "claude-code" | "codex" | "antigravity-cli";
+
+type McpInstallResult = {
+  target: McpToolTarget;
+  label: string;
+  path?: string;
+  ok: boolean;
+  message: string;
 };
 
 const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
@@ -68,6 +80,7 @@ async function main() {
 
     printSelection(provider, updates);
 
+    const mcpTargets = await chooseMcpTargets(rl);
     const shouldStart = await confirm(
       rl,
       "Start Docker Compose, migrate/seed, and run API/MCP/web now?",
@@ -76,6 +89,8 @@ async function main() {
 
     await writeEnvFile(updates);
     console.log(`\nUpdated ${path.relative(rootDir, envPath)}.`);
+
+    await installMcpTargets(mcpTargets, { ...env, ...updates });
 
     if (!shouldStart) {
       console.log("Configuration saved. Start later with pnpm start:local.");
@@ -176,6 +191,33 @@ function printHeader() {
   console.log("This configures embeddings, starts Docker infrastructure, runs migrations, and launches API/MCP/web.\n");
 }
 
+async function chooseMcpTargets(rl: ReturnType<typeof createInterface>) {
+  const choices: Array<Choice<McpToolTarget>> = [
+    {
+      label: "Claude Code",
+      description: "writes Centragent to ~/.claude.json for this project",
+      value: "claude-code"
+    },
+    {
+      label: "Codex",
+      description: "writes Centragent to ~/.codex/config.toml",
+      value: "codex"
+    },
+    {
+      label: "Antigravity CLI",
+      description: "writes Centragent to ~/.gemini/antigravity-cli/mcp_config.json",
+      value: "antigravity-cli"
+    }
+  ];
+
+  return chooseMultiple(
+    rl,
+    "Install Centragent MCP into agent tools",
+    choices,
+    choices.map((choice) => choice.value)
+  );
+}
+
 async function chooseProvider(
   rl: ReturnType<typeof createInterface>,
   env: EnvMap
@@ -274,6 +316,250 @@ async function choose<TValue>(
 
     console.log("Please enter one of the listed numbers.");
   }
+}
+
+async function chooseMultiple<TValue extends string>(
+  rl: ReturnType<typeof createInterface>,
+  title: string,
+  choices: Array<Choice<TValue>>,
+  defaultValues: TValue[]
+) {
+  console.log(title);
+  choices.forEach((choice, index) => {
+    const defaultMarker = defaultValues.includes(choice.value) ? " [default]" : "";
+    const description = choice.description ? ` - ${choice.description}` : "";
+    console.log(`  ${index + 1}. ${choice.label}${defaultMarker}${description}`);
+  });
+  console.log("  0. Skip MCP installation");
+
+  while (true) {
+    const answer = await rl.question(
+      `Select comma-separated numbers, Enter for defaults: `
+    );
+    const trimmed = answer.trim();
+    if (!trimmed) {
+      console.log("");
+      return defaultValues;
+    }
+
+    if (trimmed === "0") {
+      console.log("");
+      return [];
+    }
+
+    const selectedIndexes = trimmed
+      .split(",")
+      .map((part) => Number.parseInt(part.trim(), 10))
+      .filter((value) => Number.isInteger(value));
+
+    if (
+      selectedIndexes.length > 0 &&
+      selectedIndexes.every((value) => value >= 1 && value <= choices.length)
+    ) {
+      console.log("");
+      return Array.from(
+        new Set(
+          selectedIndexes
+            .map((index) => choices[index - 1]?.value)
+            .filter((value): value is TValue => Boolean(value))
+        )
+      );
+    }
+
+    console.log("Please enter comma-separated numbers from the list, or 0.");
+  }
+}
+
+async function installMcpTargets(targets: McpToolTarget[], env: EnvMap) {
+  if (targets.length === 0) {
+    console.log("Skipped MCP client installation.");
+    return;
+  }
+
+  const mcpUrl = localMcpUrl(env);
+  console.log(`\nInstalling ${mcpServerName} MCP server at ${mcpUrl}`);
+
+  const results: McpInstallResult[] = [];
+  for (const target of targets) {
+    results.push(await installMcpTarget(target, mcpUrl));
+  }
+
+  for (const result of results) {
+    const marker = result.ok ? "ok" : "failed";
+    const location = result.path ? ` (${result.path})` : "";
+    console.log(`  [${marker}] ${result.label}${location}: ${result.message}`);
+  }
+
+  if (results.some((result) => !result.ok)) {
+    console.log(
+      "Some MCP installs failed. Centragent can still start; fix the listed config and restart that tool."
+    );
+  }
+}
+
+async function installMcpTarget(
+  target: McpToolTarget,
+  mcpUrl: string
+): Promise<McpInstallResult> {
+  try {
+    if (target === "claude-code") {
+      const filePath = path.join(os.homedir(), ".claude.json");
+      await installClaudeCodeMcp(filePath, mcpUrl);
+      return {
+        target,
+        label: "Claude Code",
+        path: filePath,
+        ok: true,
+        message: "configured for this workspace"
+      };
+    }
+
+    if (target === "codex") {
+      const filePath = path.join(os.homedir(), ".codex", "config.toml");
+      await installCodexMcp(filePath, mcpUrl);
+      return {
+        target,
+        label: "Codex",
+        path: filePath,
+        ok: true,
+        message: "configured"
+      };
+    }
+
+    const filePath = path.join(
+      os.homedir(),
+      ".gemini",
+      "antigravity-cli",
+      "mcp_config.json"
+    );
+    await installAntigravityCliMcp(filePath, mcpUrl);
+    return {
+      target,
+      label: "Antigravity CLI",
+      path: filePath,
+      ok: true,
+      message: "configured with serverUrl"
+    };
+  } catch (error) {
+    return {
+      target,
+      label: labelForMcpTarget(target),
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function installClaudeCodeMcp(filePath: string, mcpUrl: string) {
+  const config = await readJsonObject(filePath, {});
+  const root = config as {
+    projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+  };
+
+  root.projects ??= {};
+  root.projects[rootDir] ??= {};
+  root.projects[rootDir].mcpServers ??= {};
+  root.projects[rootDir].mcpServers[mcpServerName] = {
+    type: "http",
+    url: mcpUrl
+  };
+
+  await writeJsonWithBackup(filePath, root);
+}
+
+async function installCodexMcp(filePath: string, mcpUrl: string) {
+  const existing = await fs.readFile(filePath, "utf8").catch(() => "");
+  const block = [
+    `[mcp_servers.${mcpServerName}]`,
+    `url = ${quoteEnvValue(mcpUrl)}`,
+    ""
+  ].join("\n");
+  const withoutExisting = existing.replace(
+    new RegExp(
+      `(^|\\r?\\n)\\[mcp_servers\\.${escapeRegExp(mcpServerName)}\\]\\r?\\n[\\s\\S]*?(?=\\r?\\n\\[|\\s*$)`,
+      "m"
+    ),
+    "$1"
+  );
+  const next = `${withoutExisting.trimEnd()}\n\n${block}`.trimStart();
+
+  await writeTextWithBackup(filePath, next.endsWith("\n") ? next : `${next}\n`);
+}
+
+async function installAntigravityCliMcp(filePath: string, mcpUrl: string) {
+  const config = await readJsonObject(filePath, {});
+  const root = config as { mcpServers?: Record<string, unknown> };
+
+  root.mcpServers ??= {};
+  root.mcpServers[mcpServerName] = {
+    serverUrl: mcpUrl
+  };
+
+  await writeJsonWithBackup(filePath, root);
+}
+
+async function readJsonObject(filePath: string, fallback: Record<string, unknown>) {
+  const contents = await fs.readFile(filePath, "utf8").catch(() => "");
+  if (!contents.trim()) {
+    return fallback;
+  }
+
+  const parsed = JSON.parse(contents) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${filePath} must contain a JSON object`);
+  }
+
+  return parsed as Record<string, unknown>;
+}
+
+async function writeJsonWithBackup(filePath: string, value: unknown) {
+  await writeTextWithBackup(filePath, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function writeTextWithBackup(filePath: string, nextContents: string) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const current = await fs.readFile(filePath, "utf8").catch(() => undefined);
+
+  if (current === nextContents) {
+    return;
+  }
+
+  if (current !== undefined) {
+    await fs.copyFile(filePath, backupPath(filePath));
+  }
+
+  await fs.writeFile(filePath, nextContents, "utf8");
+}
+
+function backupPath(filePath: string) {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\..+$/, "")
+    .replace("T", "-");
+  return `${filePath}.bak-${stamp}`;
+}
+
+function localMcpUrl(env: EnvMap) {
+  const host = env.MCP_HOST || "127.0.0.1";
+  const port = env.MCP_PORT || "3001";
+  return `http://${host}:${port}/mcp`;
+}
+
+function labelForMcpTarget(target: McpToolTarget) {
+  if (target === "claude-code") {
+    return "Claude Code";
+  }
+
+  if (target === "codex") {
+    return "Codex";
+  }
+
+  return "Antigravity CLI";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function applyProviderDefaults(

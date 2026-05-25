@@ -50,6 +50,14 @@ If `pnpm` is not on PATH yet, use `corepack pnpm ...` for the same commands.
 
 `pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/migrate/seed, then launches the API, MCP server, and web app.
 
+The launcher also asks which local agent tools should receive the Centragent MCP server. It installs the Streamable HTTP endpoint (`http://127.0.0.1:3001/mcp` by default) into:
+
+- Claude Code: `~/.claude.json`, scoped to the current workspace under `projects[<path>].mcpServers.centragent`
+- Codex: `~/.codex/config.toml` under `[mcp_servers.centragent]`
+- Antigravity CLI: `~/.gemini/antigravity-cli/mcp_config.json` with `serverUrl`
+
+Existing config files are backed up before they are changed. Restart the selected agent tools after installation so they reload MCP config.
+
 Manual startup is still available:
 
 ```bash
@@ -228,9 +236,9 @@ CENTRAGENT_API_URL = "http://127.0.0.1:4000"
 
 Restart the Codex session after editing config so the tools are discovered at startup.
 
-## Gemini CLI / Antigravity-Compatible MCP Clients
+## Antigravity CLI
 
-Gemini CLI uses `mcpServers` in `settings.json` and supports stdio, SSE, and Streamable HTTP.
+Antigravity CLI stores MCP servers separately from settings in `~/.gemini/antigravity-cli/mcp_config.json`. Remote Streamable HTTP servers use `serverUrl`, not `url` or the older `httpUrl`.
 
 HTTP:
 
@@ -238,14 +246,29 @@ HTTP:
 {
   "mcpServers": {
     "centragent": {
-      "httpUrl": "http://127.0.0.1:3001/mcp",
-      "timeout": 600000
+      "serverUrl": "http://127.0.0.1:3001/mcp"
     }
   }
 }
 ```
 
-STDIO:
+The Antigravity editor uses a neighboring config path, `~/.gemini/antigravity/mcp_config.json`, from the built-in MCP Store's raw config view. Centragent's launcher targets Antigravity CLI specifically.
+
+## Generic MCP Clients
+
+Use the Streamable HTTP endpoint where possible:
+
+```json
+{
+  "mcpServers": {
+    "centragent": {
+      "url": "http://127.0.0.1:3001/mcp"
+    }
+  }
+}
+```
+
+For stdio-only clients:
 
 ```json
 {
