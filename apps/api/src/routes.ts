@@ -35,7 +35,7 @@ const controllerForRequest = (request: FastifyRequest) => {
   const controller = new AbortController();
   let complete = false;
 
-  request.raw.on("close", () => {
+  request.raw.on("aborted", () => {
     if (!complete) {
       controller.abort();
     }
