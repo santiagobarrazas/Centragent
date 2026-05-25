@@ -79,12 +79,14 @@ export type RealtimeEnvelope<TPayload = unknown> = {
 };
 
 async function api<T>(path: string, init?: RequestInit) {
+  const headers = new Headers(init?.headers);
+  if (init?.body !== undefined && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...init?.headers
-    }
+    headers
   });
 
   const json = await response.json().catch(() => null);
@@ -129,7 +131,10 @@ export const apiClient = {
   listPendingJoinRequests: () =>
     api<{ joinRequests: JoinRequest[] }>("/join-requests?status=pending"),
   acceptJoinRequest: (joinRequestId: string) =>
-    api(`/join-requests/${joinRequestId}/accept`, { method: "POST" }),
+    api(`/join-requests/${joinRequestId}/accept`, {
+      method: "POST",
+      body: JSON.stringify({})
+    }),
   rejectJoinRequest: (joinRequestId: string, reason?: string) =>
     api(`/join-requests/${joinRequestId}/reject`, {
       method: "POST",

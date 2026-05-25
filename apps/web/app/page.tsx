@@ -109,16 +109,6 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      void loadPendingJoinRequests().catch((caught: Error) =>
-        setError(caught.message)
-      );
-    }, 5000);
-
-    return () => window.clearInterval(interval);
-  }, [loadPendingJoinRequests]);
-
-  useEffect(() => {
     const socket = new WebSocket(wsUrl());
     socketRef.current = socket;
 

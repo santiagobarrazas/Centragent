@@ -51,6 +51,30 @@ app.setErrorHandler((error, _request, reply) => {
     });
   }
 
+  const httpError = error as {
+    code?: unknown;
+    message?: unknown;
+    statusCode?: unknown;
+  };
+
+  if (
+    typeof httpError.statusCode === "number" &&
+    httpError.statusCode >= 400
+  ) {
+    return reply.status(httpError.statusCode).send({
+      error: {
+        code:
+          typeof httpError.code === "string"
+            ? httpError.code
+            : "REQUEST_ERROR",
+        message:
+          typeof httpError.message === "string"
+            ? httpError.message
+            : "Request failed"
+      }
+    });
+  }
+
   app.log.error({ error }, "Unhandled request error");
   return reply.status(500).send({
     error: {
