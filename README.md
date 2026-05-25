@@ -52,7 +52,7 @@ On Windows PowerShell:
 
 The root launcher uses Corepack internally, installs dependencies with pnpm if `node_modules` is missing, then runs the interactive local startup flow. If `pnpm` is already on PATH, `pnpm start:local` works too.
 
-`pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/migrate/seed, then launches the API, MCP server, and web app.
+`pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/deploy/seed, then launches the API, MCP server, and web app.
 
 The launcher also asks which local agent tools should receive the Centragent MCP server. It installs the Streamable HTTP endpoint (`http://127.0.0.1:3001/mcp` by default) into:
 
@@ -67,7 +67,7 @@ Manual startup is still available:
 ```bash
 docker compose up -d
 corepack pnpm db:generate
-corepack pnpm db:migrate
+corepack pnpm db:deploy
 corepack pnpm db:seed
 corepack pnpm dev
 ```

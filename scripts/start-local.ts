@@ -689,7 +689,7 @@ async function runSetupCommands() {
   ]);
   await runStep("Applying database migrations", corepackCommand, [
     "pnpm",
-    "db:migrate"
+    "db:deploy"
   ]);
   await runStep("Seeding singleton master user", corepackCommand, [
     "pnpm",
@@ -799,6 +799,14 @@ main().catch((error: Error) => {
   console.error(`\nLocal launcher failed: ${error.message}`);
   if (error.message.toLowerCase().includes("docker")) {
     console.error("Make sure Docker Desktop is running, then try again.");
+  }
+  if (
+    error.message.includes("P1002") ||
+    error.message.toLowerCase().includes("advisory lock")
+  ) {
+    console.error(
+      "A Prisma migration process may still be holding the database lock. Stop the previous prompt with Ctrl+C, wait a moment, then rerun .\\start-local.cmd."
+    );
   }
   process.exit(1);
 });

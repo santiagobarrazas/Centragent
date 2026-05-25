@@ -13,6 +13,7 @@
     "web:dev": "corepack pnpm --filter @centragent/web dev",
     "db:generate": "corepack pnpm --filter @centragent/db db:generate",
     "db:migrate": "corepack pnpm --filter @centragent/db db:migrate",
+    "db:deploy": "corepack pnpm --filter @centragent/db db:deploy",
     "db:seed": "corepack pnpm --filter @centragent/db db:seed",
     "typecheck": "corepack pnpm -r typecheck && tsc --noEmit -p tsconfig.scripts.json",
     "lint": "corepack pnpm -r lint"
