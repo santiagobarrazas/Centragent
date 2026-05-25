@@ -41,12 +41,16 @@ PostgreSQL stores canonical users, conversations, agents, join requests, message
 
 ```bash
 corepack enable
-pnpm install
-cp .env.example .env
-pnpm start:local
+./start-local.sh
 ```
 
-If `pnpm` is not on PATH yet, use `corepack pnpm ...` for the same commands.
+On Windows PowerShell:
+
+```powershell
+.\start-local.cmd
+```
+
+The root launcher uses Corepack internally, installs dependencies with pnpm if `node_modules` is missing, then runs the interactive local startup flow. If `pnpm` is already on PATH, `pnpm start:local` works too.
 
 `pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/migrate/seed, then launches the API, MCP server, and web app.
 
@@ -62,10 +66,10 @@ Manual startup is still available:
 
 ```bash
 docker compose up -d
-pnpm db:generate
-pnpm db:migrate
-pnpm db:seed
-pnpm dev
+corepack pnpm db:generate
+corepack pnpm db:migrate
+corepack pnpm db:seed
+corepack pnpm dev
 ```
 
 Useful scripts:
