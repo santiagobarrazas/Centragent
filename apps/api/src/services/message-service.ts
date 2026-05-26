@@ -7,6 +7,7 @@ import {
 } from "@centragent/shared";
 import type { AppConfig } from "../config.js";
 import { forbidden, notFound } from "../errors.js";
+import type { AgentEventService } from "./agent-event-service.js";
 import type { QdrantMemoryService } from "./qdrant-memory-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
@@ -25,6 +26,7 @@ export class MessageService {
     private readonly prisma: PrismaClient,
     private readonly realtime: RealtimeService,
     private readonly qdrantMemory: QdrantMemoryService,
+    private readonly agentEvents: AgentEventService,
     private readonly config: AppConfig,
     private readonly log: FastifyBaseLogger
   ) {}
@@ -80,6 +82,13 @@ export class MessageService {
 
     const rows = await this.prisma.message.findMany({
       where,
+      include: {
+        conversationAgent: {
+          include: {
+            agent: true
+          }
+        }
+      },
       orderBy:
         input.direction === "before"
           ? [{ sequenceNumber: "desc" }]
@@ -98,7 +107,7 @@ export class MessageService {
         : undefined;
 
     return {
-      messages,
+      messages: messages.map((message) => this.presentMessage(message)),
       nextCursor: boundary
         ? encodeSequenceCursor(boundary.sequenceNumber)
         : null
@@ -153,6 +162,13 @@ export class MessageService {
               content: input.content,
               sequenceNumber: (maxSequence._max.sequenceNumber ?? 0) + 1,
               metadata: (input.metadata ?? {}) as Prisma.InputJsonValue
+            },
+            include: {
+              conversationAgent: {
+                include: {
+                  agent: true
+                }
+              }
             }
           });
 
@@ -166,7 +182,7 @@ export class MessageService {
 
         await this.realtime.emit(
           "message.created",
-          message,
+          this.presentMessage(message),
           input.conversationId
         );
         await this.realtime.emit("conversation.updated", {
@@ -180,7 +196,16 @@ export class MessageService {
           this.log.warn({ error, messageId: message.id }, "Qdrant indexing failed");
         }
 
-        return message;
+        try {
+          await this.agentEvents.createMentionsForMessage(message);
+        } catch (error) {
+          this.log.warn(
+            { error, messageId: message.id },
+            "Agent mention event creation failed"
+          );
+        }
+
+        return this.presentMessage(message);
       } catch (error) {
         const maybePrismaError = error as { code?: string };
         if (maybePrismaError.code === "P2002" && attempt < 2) {
@@ -191,5 +216,34 @@ export class MessageService {
     }
 
     throw new Error("Unable to create message");
+  }
+
+  private presentMessage<
+    TMessage extends {
+      senderType: string;
+      conversationAgent?: {
+        agent: {
+          id: string;
+          name: string;
+          handle: string;
+          provider: string;
+        };
+      } | null;
+    }
+  >(message: TMessage) {
+    const agent = message.conversationAgent?.agent;
+
+    return {
+      ...message,
+      sender:
+        message.senderType === "agent" && agent
+          ? {
+              id: agent.id,
+              name: agent.name,
+              handle: agent.handle,
+              provider: agent.provider
+            }
+          : null
+    };
   }
 }

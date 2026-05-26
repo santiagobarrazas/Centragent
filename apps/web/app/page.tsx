@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Bell,
   Check,
   Circle,
   Clock3,
@@ -41,6 +42,11 @@ const shortId = (id: string | null) => (id ? id.slice(0, 8) : "none");
 const secondsLeft = (expiresAt: string, now: number) =>
   Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
 
+const agentStatusLabel = (membership: AgentMembership) =>
+  membership.agent.presence?.activityTitle ??
+  membership.agent.presence?.status ??
+  membership.status;
+
 export default function Home() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -61,6 +67,14 @@ export default function Home() {
     [conversations, selectedId]
   );
   const firstJoinRequest = joinRequests[0] ?? null;
+  const agentByMembershipId = useMemo(
+    () => new Map(agents.map((membership) => [membership.id, membership.agent])),
+    [agents]
+  );
+  const agentById = useMemo(
+    () => new Map(agents.map((membership) => [membership.agentId, membership.agent])),
+    [agents]
+  );
 
   const loadConversations = useCallback(async () => {
     const response = await apiClient.listConversations();
@@ -145,7 +159,12 @@ export default function Home() {
       }
 
       if (
-        envelope.event === "agent.joined" &&
+        (envelope.event === "agent.joined" ||
+          envelope.event === "agent.presence.updated" ||
+          envelope.event === "agent.activity.started" ||
+          envelope.event === "agent.activity.finished" ||
+          envelope.event === "agent.event.created" ||
+          envelope.event === "agent.event.acknowledged") &&
         selectedId &&
         envelope.conversationId === selectedId
       ) {
@@ -344,11 +363,26 @@ export default function Home() {
               key={message.id}
             >
               <div className="message-meta">
-                <span>
-                  {message.senderType === "agent"
-                    ? `Agent ${shortId(message.senderId)}`
-                    : "Master user"}
-                </span>
+                {message.senderType === "agent" ? (
+                  <>
+                    <span>
+                      {message.sender?.name ??
+                        agentByMembershipId.get(message.conversationAgentId ?? "")
+                          ?.name ??
+                        agentById.get(message.senderId ?? "")?.name ??
+                        "Unknown agent"}
+                    </span>
+                    <span>
+                      @{message.sender?.handle ??
+                        agentByMembershipId.get(message.conversationAgentId ?? "")
+                          ?.handle ??
+                        agentById.get(message.senderId ?? "")?.handle ??
+                        "unknown"}
+                    </span>
+                  </>
+                ) : (
+                  <span>Master user</span>
+                )}
                 <span>#{message.sequenceNumber}</span>
                 <span>{formatTime(message.createdAt)}</span>
               </div>
@@ -368,7 +402,7 @@ export default function Home() {
             value={draft}
             disabled={!selectedId}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Message as master user"
+            placeholder="Message as master user. Mention agents with @handle."
             rows={3}
           />
           <button type="submit" disabled={!selectedId || !draft.trim()} title="Send message">
@@ -390,9 +424,21 @@ export default function Home() {
               <div className="agent-row" key={membership.id}>
                 <div>
                   <strong>{membership.agent.name}</strong>
-                  <span>{membership.agent.provider} / {membership.role}</span>
+                  <span>
+                    @{membership.agent.handle} / {membership.agent.provider} /{" "}
+                    {membership.role}
+                  </span>
+                  <small>{agentStatusLabel(membership)}</small>
                 </div>
-                <em>{membership.status}</em>
+                <div className="agent-badges">
+                  {membership.pendingEventCount > 0 ? (
+                    <span className="event-badge" title="Pending inbox events">
+                      <Bell size={12} />
+                      {membership.pendingEventCount}
+                    </span>
+                  ) : null}
+                  <em>{membership.agent.presence?.status ?? membership.status}</em>
+                </div>
               </div>
             ))}
           </div>

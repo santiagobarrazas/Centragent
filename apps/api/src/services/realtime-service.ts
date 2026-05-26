@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyBaseLogger } from "fastify";
 import { Redis } from "ioredis";
 import {
+  agentEventsRedisChannel,
   joinRequestRedisChannel,
   REALTIME_REDIS_CHANNEL,
   type RealtimeEnvelope,
@@ -154,6 +155,21 @@ export class RealtimeService {
       );
     } catch (error) {
       this.log.warn({ error, joinRequestId }, "join decision publish failed");
+    }
+  }
+
+  async publishAgentEvent(agentId: string, payload: unknown) {
+    if (!this.redisReady) {
+      return;
+    }
+
+    try {
+      await this.publisher.publish(
+        agentEventsRedisChannel(agentId),
+        JSON.stringify(payload)
+      );
+    } catch (error) {
+      this.log.warn({ error, agentId }, "agent event wake publish failed");
     }
   }
 

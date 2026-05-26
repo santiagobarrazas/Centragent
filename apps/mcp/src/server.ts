@@ -1,11 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  ackAgentEventsSchema,
+  agentPresenceSchema,
+  finishAgentActivitySchema,
   listConversationsSchema,
   readConversationSchema,
   requestJoinConversationSchema,
   semanticSearchSchema,
-  sendAgentMessageSchema
+  sendAgentMessageSchema,
+  startAgentActivitySchema,
+  syncAgentInboxSchema,
+  waitForAgentEventsSchema
 } from "@centragent/shared";
 import type { BackendClient } from "./backend-client.js";
 
@@ -129,6 +135,119 @@ export function createCentragentMcpServer(backend: BackendClient) {
           body: args
         }
       );
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "set_agent_presence",
+    {
+      title: "Set agent presence",
+      description:
+        "Declare whether this agent is available, working, listening, needs attention, or offline. Use working while focused on a task; do not block on events during active work.",
+      inputSchema: agentPresenceSchema.shape
+    },
+    async (input) => {
+      const args = agentPresenceSchema.parse(input);
+      const result = await backend.request("/internal/mcp/agent-presence", {
+        method: "POST",
+        body: args
+      });
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "start_agent_activity",
+    {
+      title: "Start agent activity",
+      description:
+        "Mark the beginning of focused work. This sets presence to working so mentions are queued in the durable inbox instead of interrupting the task.",
+      inputSchema: startAgentActivitySchema.shape
+    },
+    async (input) => {
+      const args = startAgentActivitySchema.parse(input);
+      const result = await backend.request("/internal/mcp/agent-activities/start", {
+        method: "POST",
+        body: args
+      });
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "finish_agent_activity",
+    {
+      title: "Finish agent activity",
+      description:
+        "Mark focused work complete/failed/cancelled and immediately return any pending inbox events the agent should handle next.",
+      inputSchema: finishAgentActivitySchema.shape
+    },
+    async (input) => {
+      const args = finishAgentActivitySchema.parse(input);
+      const result = await backend.request(
+        "/internal/mcp/agent-activities/finish",
+        {
+          method: "POST",
+          body: args
+        }
+      );
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "sync_agent_inbox",
+    {
+      title: "Sync agent inbox",
+      description:
+        "Non-blocking inbox sync. Call this after finishing useful work to retrieve queued mentions, handoffs, task assignments, and other orchestration events.",
+      inputSchema: syncAgentInboxSchema.shape
+    },
+    async (input) => {
+      const args = syncAgentInboxSchema.parse(input);
+      const result = await backend.request("/internal/mcp/agent-inbox/sync", {
+        method: "POST",
+        body: args
+      });
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "ack_agent_events",
+    {
+      title: "Acknowledge agent inbox events",
+      description:
+        "Acknowledge inbox deliveries after the agent has handled them. Use deliveryIds returned by sync_agent_inbox or wait_for_events.",
+      inputSchema: ackAgentEventsSchema.shape
+    },
+    async (input) => {
+      const args = ackAgentEventsSchema.parse(input);
+      const result = await backend.request("/internal/mcp/agent-inbox/ack", {
+        method: "POST",
+        body: args
+      });
+      return jsonToolResult(result);
+    }
+  );
+
+  server.registerTool(
+    "wait_for_events",
+    {
+      title: "Wait for agent events",
+      description:
+        "Optional blocking wait for idle/listening agents. Do not use while doing active work; use sync_agent_inbox after the current task instead.",
+      inputSchema: waitForAgentEventsSchema.shape
+    },
+    async (input, extra) => {
+      const args = waitForAgentEventsSchema.parse(input);
+      const signal = (extra as { signal?: AbortSignal } | undefined)?.signal;
+      const result = await backend.request("/internal/mcp/agent-inbox/wait", {
+        method: "POST",
+        body: args,
+        ...(signal ? { signal } : {})
+      });
       return jsonToolResult(result);
     }
   );

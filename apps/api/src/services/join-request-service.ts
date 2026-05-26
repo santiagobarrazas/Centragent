@@ -55,6 +55,7 @@ export class JoinRequestService {
 
     const agent = await this.agents.findOrCreateAgent({
       name: input.agentName,
+      ...(input.agentHandle ? { agentHandle: input.agentHandle } : {}),
       provider: input.provider,
       ...(input.clientInstanceId
         ? { clientInstanceId: input.clientInstanceId }

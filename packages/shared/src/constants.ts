@@ -33,6 +33,35 @@ export const CONVERSATION_AGENT_STATUSES = [
   "timed_out"
 ] as const;
 
+export const AGENT_PRESENCE_STATUSES = [
+  "available",
+  "working",
+  "listening",
+  "needs_attention",
+  "offline"
+] as const;
+
+export const AGENT_ACTIVITY_STATUSES = [
+  "working",
+  "completed",
+  "failed",
+  "cancelled"
+] as const;
+
+export const AGENT_EVENT_TYPES = [
+  "mention",
+  "message",
+  "task_assigned",
+  "handoff_requested",
+  "system"
+] as const;
+
+export const AGENT_EVENT_DELIVERY_STATUSES = [
+  "pending",
+  "delivered",
+  "acknowledged"
+] as const;
+
 export const MESSAGE_SENDER_TYPES = ["user", "agent", "system", "tool"] as const;
 export const MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 export const MESSAGE_STATUSES = ["complete", "streaming", "failed"] as const;

@@ -27,6 +27,9 @@ model Conversation {
   lastMessageAt DateTime?           @map("last_message_at")
   owner         User                @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   agents        ConversationAgent[]
+  agentActivities AgentActivity[]
+  agentEvents    AgentEvent[]
+  agentPresences AgentPresence[]
   joinRequests  JoinRequest[]
   messages      Message[]
   runs          Run[]
@@ -41,13 +44,19 @@ model Agent {
   id                 String              @id @default(uuid()) @db.Uuid
   ownerId            String?             @map("owner_id") @db.Uuid
   name               String
+  handle             String              @unique
   provider           String
   clientInstanceId   String?             @map("client_instance_id")
   config             Json                @default("{}")
+  lastSeenAt         DateTime?           @map("last_seen_at")
   createdAt          DateTime            @default(now()) @map("created_at")
   updatedAt          DateTime            @updatedAt @map("updated_at")
   owner              User?               @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  activities         AgentActivity[]
   conversationAgents ConversationAgent[]
+  eventDeliveries    AgentEventDelivery[]
+  presence           AgentPresence?
+  targetedEvents     AgentEvent[]        @relation("AgentEventTargetAgent")
   joinRequests       JoinRequest[]
   runs               Run[]
   qdrantMemory       QdrantMemory[]
@@ -70,6 +79,10 @@ model ConversationAgent {
   updatedAt     DateTime       @updatedAt @map("updated_at")
   conversation  Conversation   @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   agent         Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  activities    AgentActivity[]
+  eventDeliveries AgentEventDelivery[]
+  presences     AgentPresence[]
+  targetedEvents AgentEvent[]  @relation("AgentEventTargetConversationAgent")
   messages      Message[]
   runs          Run[]
   qdrantMemory  QdrantMemory[]
@@ -78,6 +91,95 @@ model ConversationAgent {
   @@index([agentId])
   @@index([conversationId, status])
   @@map("conversation_agents")
+}
+
+model AgentPresence {
+  agentId                    String             @id @map("agent_id") @db.Uuid
+  status                     String
+  statusMessage              String?            @map("status_message")
+  activeConversationId       String?            @map("active_conversation_id") @db.Uuid
+  activeConversationAgentId  String?            @map("active_conversation_agent_id") @db.Uuid
+  activityTitle              String?            @map("activity_title")
+  metadata                   Json               @default("{}")
+  lastSeenAt                 DateTime           @default(now()) @map("last_seen_at")
+  updatedAt                  DateTime           @updatedAt @map("updated_at")
+  agent                      Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  activeConversation         Conversation?      @relation(fields: [activeConversationId], references: [id], onDelete: SetNull)
+  activeConversationAgent    ConversationAgent? @relation(fields: [activeConversationAgentId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([activeConversationId])
+  @@index([activeConversationAgentId])
+  @@map("agent_presence")
+}
+
+model AgentActivity {
+  id                   String             @id @default(uuid()) @db.Uuid
+  agentId              String             @map("agent_id") @db.Uuid
+  conversationId        String?            @map("conversation_id") @db.Uuid
+  conversationAgentId   String?            @map("conversation_agent_id") @db.Uuid
+  title                String
+  status               String
+  startedAt            DateTime           @default(now()) @map("started_at")
+  completedAt          DateTime?          @map("completed_at")
+  metadata             Json               @default("{}")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  agent                Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversation          Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  conversationAgent     ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+
+  @@index([agentId, status])
+  @@index([conversationId])
+  @@index([conversationAgentId])
+  @@map("agent_activities")
+}
+
+model AgentEvent {
+  id                          String                @id @default(uuid()) @db.Uuid
+  type                        String
+  conversationId              String?               @map("conversation_id") @db.Uuid
+  messageId                   String?               @map("message_id") @db.Uuid
+  actorType                   String?               @map("actor_type")
+  actorId                     String?               @map("actor_id") @db.Uuid
+  targetAgentId               String?               @map("target_agent_id") @db.Uuid
+  targetConversationAgentId   String?               @map("target_conversation_agent_id") @db.Uuid
+  title                       String?
+  content                     String?
+  data                        Json                  @default("{}")
+  createdAt                   DateTime              @default(now()) @map("created_at")
+  conversation                Conversation?         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  message                     Message?              @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  targetAgent                 Agent?                @relation("AgentEventTargetAgent", fields: [targetAgentId], references: [id], onDelete: SetNull)
+  targetConversationAgent     ConversationAgent?    @relation("AgentEventTargetConversationAgent", fields: [targetConversationAgentId], references: [id], onDelete: SetNull)
+  deliveries                  AgentEventDelivery[]
+
+  @@index([conversationId, createdAt])
+  @@index([messageId])
+  @@index([targetAgentId, createdAt])
+  @@index([targetConversationAgentId, createdAt])
+  @@index([type, createdAt])
+  @@map("agent_events")
+}
+
+model AgentEventDelivery {
+  id                   String             @id @default(uuid()) @db.Uuid
+  eventId              String             @map("event_id") @db.Uuid
+  agentId              String             @map("agent_id") @db.Uuid
+  conversationAgentId  String?            @map("conversation_agent_id") @db.Uuid
+  status               String
+  deliveredAt          DateTime?          @map("delivered_at")
+  acknowledgedAt       DateTime?          @map("acknowledged_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+  event                AgentEvent         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  agent                Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversationAgent    ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+
+  @@unique([eventId, agentId, conversationAgentId])
+  @@index([agentId, status, createdAt])
+  @@index([conversationAgentId, status])
+  @@map("agent_event_deliveries")
 }
 
 model JoinRequest {
@@ -115,6 +217,7 @@ model Message {
   metadata             Json               @default("{}")
   conversation         Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   conversationAgent    ConversationAgent? @relation(fields: [conversationAgentId], references: [id], onDelete: SetNull)
+  agentEvents          AgentEvent[]
   userMessageRuns      Run[]              @relation("RunUserMessage")
   assistantMessageRuns Run[]              @relation("RunAssistantMessage")
   qdrantMemory         QdrantMemory[]

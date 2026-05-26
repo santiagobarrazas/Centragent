@@ -424,19 +424,43 @@ button:disabled {
 }
 
 .agent-row span,
+.agent-row small,
 .request-main span,
 .result-card span {
   color: var(--muted);
   font-size: 12px;
 }
 
-.agent-row em {
+.agent-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: max-content;
+}
+
+.agent-row em,
+.event-badge {
   padding: 4px 7px;
   border-radius: 999px;
   background: #eef2ff;
   color: var(--blue);
   font-size: 12px;
   font-style: normal;
+}
+
+.event-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #fff7ed;
+  color: var(--amber);
+  font-weight: 800;
 }
 
 .request-card {

@@ -21,6 +21,12 @@ export type Message = {
   sequenceNumber: number;
   createdAt: string;
   metadata: Record<string, unknown>;
+  sender: {
+    id: string;
+    name: string;
+    handle: string;
+    provider: string;
+  } | null;
 };
 
 export type AgentMembership = {
@@ -31,11 +37,20 @@ export type AgentMembership = {
   status: string;
   joinedAt: string | null;
   leftAt: string | null;
+  pendingEventCount: number;
   agent: {
     id: string;
     name: string;
+    handle: string;
     provider: string;
     clientInstanceId: string | null;
+    presence: {
+      status: string;
+      statusMessage: string | null;
+      activityTitle: string | null;
+      lastSeenAt: string;
+      updatedAt: string;
+    } | null;
   };
 };
 
@@ -51,6 +66,7 @@ export type JoinRequest = {
   agent: {
     id: string;
     name: string;
+    handle: string;
     provider: string;
     clientInstanceId: string | null;
   };

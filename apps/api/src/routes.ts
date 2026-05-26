@@ -1,15 +1,21 @@
 import { z } from "zod";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import {
+  ackAgentEventsSchema,
+  agentPresenceSchema,
   createConversationSchema,
   createUserMessageSchema,
+  finishAgentActivitySchema,
   listConversationsSchema,
   messagePaginationQuerySchema,
   readConversationSchema,
   rejectJoinRequestSchema,
   requestJoinConversationSchema,
   semanticSearchSchema,
-  sendAgentMessageSchema
+  sendAgentMessageSchema,
+  startAgentActivitySchema,
+  syncAgentInboxSchema,
+  waitForAgentEventsSchema
 } from "@centragent/shared";
 import { forbidden } from "./errors.js";
 import type { Services } from "./types.js";
@@ -98,11 +104,9 @@ export async function registerRoutes(app: FastifyInstance, services: Services) {
 
   app.get("/conversations/:conversationId/agents", async (request) => {
     const params = parse(conversationParamsSchema, request.params);
-    const agents = await services.prisma.conversationAgent.findMany({
-      where: { conversationId: params.conversationId },
-      include: { agent: true },
-      orderBy: [{ status: "asc" }, { createdAt: "asc" }]
-    });
+    const agents = await services.agents.listConversationAgents(
+      params.conversationId
+    );
     return { agents };
   });
 
@@ -203,6 +207,48 @@ export async function registerRoutes(app: FastifyInstance, services: Services) {
       sequenceNumber: message.sequenceNumber,
       createdAt: message.createdAt
     });
+  });
+
+  app.post("/internal/mcp/agent-presence", async (request) => {
+    const body = parse(agentPresenceSchema, request.body);
+    return services.agentEvents.setPresence(body);
+  });
+
+  app.post("/internal/mcp/agent-activities/start", async (request) => {
+    const body = parse(startAgentActivitySchema, request.body);
+    return services.agentEvents.startActivity(body);
+  });
+
+  app.post("/internal/mcp/agent-activities/finish", async (request) => {
+    const body = parse(finishAgentActivitySchema, request.body);
+    return services.agentEvents.finishActivity(body);
+  });
+
+  app.post("/internal/mcp/agent-inbox/sync", async (request) => {
+    const body = parse(syncAgentInboxSchema, request.body);
+    return services.agentEvents.syncInbox(body);
+  });
+
+  app.post("/internal/mcp/agent-inbox/ack", async (request) => {
+    const body = parse(ackAgentEventsSchema, request.body);
+    return services.agentEvents.ackEvents(body);
+  });
+
+  app.post("/internal/mcp/agent-inbox/wait", async (request, reply) => {
+    const body = parse(waitForAgentEventsSchema, request.body);
+    const lifecycle = controllerForRequest(request);
+
+    try {
+      const result = await services.agentEvents.waitForEvents(
+        body,
+        lifecycle.signal
+      );
+      lifecycle.complete();
+      return reply.send(result);
+    } catch (error) {
+      lifecycle.complete();
+      throw error;
+    }
   });
 
   app.post(

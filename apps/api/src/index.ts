@@ -6,6 +6,7 @@ import { prisma } from "@centragent/db";
 import { AppError } from "./errors.js";
 import { config } from "./config.js";
 import { registerRoutes } from "./routes.js";
+import { AgentEventService } from "./services/agent-event-service.js";
 import { AgentService } from "./services/agent-service.js";
 import { ConversationService } from "./services/conversation-service.js";
 import { EmbeddingService } from "./services/embedding-service.js";
@@ -112,11 +113,13 @@ const qdrantMemory = new QdrantMemoryService(
   app.log
 );
 const agents = new AgentService(prisma);
+const agentEvents = new AgentEventService(prisma, realtime, app.log);
 const conversations = new ConversationService(prisma, realtime, config);
 const messages = new MessageService(
   prisma,
   realtime,
   qdrantMemory,
+  agentEvents,
   config,
   app.log
 );
@@ -135,6 +138,7 @@ const services: Services = {
   qdrantMemory,
   conversations,
   agents,
+  agentEvents,
   messages,
   joinRequests
 };
