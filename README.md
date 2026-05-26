@@ -52,7 +52,15 @@ On Windows PowerShell:
 
 The root launcher uses Corepack internally, installs dependencies with pnpm if `node_modules` is missing, then runs the interactive local startup flow. If `pnpm` is already on PATH, `pnpm start:local` works too.
 
-`pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, starts Docker Compose, runs Prisma generate/deploy/seed, then launches the API, MCP server, and web app.
+`pnpm start:local` is the recommended local entrypoint. It asks which embedding provider to use, lets you pick from Centragent's shared model registry, writes `.env`, sets `EMBEDDING_DIMENSIONS` to the selected model's vector size, derives a Qdrant collection name that includes provider/model/dimensions, installs MCP config for selected tools, then starts the full Docker Compose stack.
+
+Docker Compose runs Postgres, Redis, Qdrant, Prisma deploy/seed, the Fastify API, the MCP server, and the Next.js web app. The API, MCP, and web containers bind back to localhost:
+
+- Web: `http://127.0.0.1:3000`
+- API: `http://127.0.0.1:4000`
+- MCP: `http://127.0.0.1:3001/mcp`
+
+When a setting already exists in `.env`, the launcher offers to keep it. Press Enter to preserve the current value, type `auto` to use the registry-derived value, or type a replacement. This lets you add MCP installs or adjust one provider setting without accidentally drifting the existing model, dimensions, collection, or API keys.
 
 After the first setup, use the quick start command to reuse `.env` and start everything without prompts:
 
@@ -76,15 +84,15 @@ The launcher also asks which local agent tools should receive the Centragent MCP
 
 Existing config files are backed up before they are changed. Restart the selected agent tools after installation so they reload MCP config.
 
-Manual startup is still available:
+Manual Docker Compose startup is still available:
 
 ```bash
-docker compose up -d
-corepack pnpm db:generate
-corepack pnpm db:deploy
-corepack pnpm db:seed
-corepack pnpm dev
+docker compose up --build -d
+docker compose logs -f api mcp web
+docker compose down
 ```
+
+For advanced local development outside Docker, you can still run the app processes directly after starting only the datastore services, but the default path is now Compose for the whole stack.
 
 Useful scripts:
 
@@ -93,6 +101,9 @@ pnpm api:dev      # Fastify API on 127.0.0.1:4000
 pnpm web:dev      # Next.js app on 127.0.0.1:3000
 pnpm mcp:dev      # Streamable HTTP MCP server on 127.0.0.1:3001/mcp
 pnpm mcp:stdio    # Local STDIO MCP transport wrapper
+pnpm compose:up   # Build and start the full Docker Compose stack
+pnpm compose:logs # Follow API/MCP/web container logs
+pnpm compose:down # Stop the Docker Compose stack
 pnpm start:local  # Interactive all-in-one local launcher
 pnpm start:local:quick # Start from existing .env without prompts
 pnpm typecheck

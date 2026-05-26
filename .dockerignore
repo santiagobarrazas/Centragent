@@ -1,0 +1,12 @@
+.git
+.next
+.turbo
+.centragent-runtime
+node_modules
+**/node_modules
+apps/*/.next
+apps/*/dist
+packages/*/dist
+.env
+*.log
+*.tsbuildinfo

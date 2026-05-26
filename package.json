@@ -5,6 +5,9 @@
   "packageManager": "pnpm@10.13.1",
   "scripts": {
     "dev": "corepack pnpm --parallel --filter @centragent/api --filter @centragent/mcp --filter @centragent/web dev",
+    "compose:up": "docker compose up --build -d",
+    "compose:logs": "docker compose logs -f api mcp web",
+    "compose:down": "docker compose down",
     "start:local": "tsx scripts/start-local.ts",
     "start:local:quick": "tsx scripts/start-local.ts --yes",
     "local:dev": "tsx scripts/start-local.ts",
@@ -23,5 +26,14 @@
     "@types/node": "^24.0.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp"
+    ]
   }
 }

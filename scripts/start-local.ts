@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -40,7 +40,6 @@ type McpInstallResult = {
   message: string;
 };
 
-const corepackCommand = process.platform === "win32" ? "corepack.cmd" : "corepack";
 const isWindows = process.platform === "win32";
 const quickStart = process.argv.includes("--yes") || process.argv.includes("--no-interactive");
 
@@ -51,7 +50,7 @@ async function main() {
   if (quickStart) {
     printQuickStart(env);
     await runSetupCommands();
-    await startDevProcesses();
+    printDockerStarted();
     return;
   }
 
@@ -65,12 +64,21 @@ async function main() {
     };
 
     if (provider === "disabled") {
-      updates.QDRANT_COLLECTION = defaultQdrantCollectionName({ provider });
-      updates.EMBEDDING_DIMENSIONS = env.EMBEDDING_DIMENSIONS || "768";
+      const dimensions = await promptEnvValue(rl, {
+        key: "EMBEDDING_DIMENSIONS",
+        current: env.EMBEDDING_DIMENSIONS,
+        suggested: "768",
+        label: "Embedding dimensions"
+      });
+      updates.EMBEDDING_DIMENSIONS = dimensions;
+      updates.QDRANT_COLLECTION = await chooseQdrantCollection(rl, env, {
+        provider,
+        dimensions: Number.parseInt(dimensions, 10)
+      });
     } else if (isActiveProvider(provider)) {
       const model = await chooseModel(rl, provider, env);
-      const dimensions = model.nativeDimensions;
-      const collection = defaultQdrantCollectionName({
+      const dimensions = await chooseDimensions(rl, model, env);
+      const collection = await chooseQdrantCollection(rl, env, {
         provider,
         model: model.model,
         dimensions
@@ -93,7 +101,7 @@ async function main() {
     const mcpTargets = await chooseMcpTargets(rl);
     const shouldStart = await confirm(
       rl,
-      "Start Docker Compose, migrate/seed, and run API/MCP/web now?",
+      "Start the full Docker Compose stack now?",
       true
     );
 
@@ -111,7 +119,7 @@ async function main() {
   }
 
   await runSetupCommands();
-  await startDevProcesses();
+  printDockerStarted();
 }
 
 async function ensureEnvFile() {
@@ -198,7 +206,8 @@ function quoteEnvValue(value: string) {
 
 function printHeader() {
   console.log("\nCentragent local launcher");
-  console.log("This configures embeddings, starts Docker infrastructure, runs migrations, and launches API/MCP/web.\n");
+  console.log("This configures embeddings and starts the full Docker Compose stack: Postgres, Redis, Qdrant, API, MCP, and web.\n");
+  console.log("When a value is already populated, pressing Enter keeps it.\n");
 }
 
 function printQuickStart(env: EnvMap) {
@@ -292,6 +301,72 @@ async function chooseModel(
     }),
     defaultIndex
   );
+}
+
+async function chooseDimensions(
+  rl: ReturnType<typeof createInterface>,
+  model: EmbeddingModelDefinition,
+  env: EnvMap
+) {
+  const suggested = String(model.nativeDimensions);
+  const value = await promptEnvValue(rl, {
+    key: "EMBEDDING_DIMENSIONS",
+    current: env.EMBEDDING_DIMENSIONS,
+    suggested,
+    label: "Embedding dimensions"
+  });
+  const dimensions = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(dimensions) || dimensions <= 0) {
+    console.log(`Invalid dimensions "${value}". Using ${suggested}.`);
+    return model.nativeDimensions;
+  }
+
+  return dimensions;
+}
+
+async function chooseQdrantCollection(
+  rl: ReturnType<typeof createInterface>,
+  env: EnvMap,
+  input: {
+    provider: EmbeddingProvider;
+    model?: string;
+    dimensions?: number;
+  }
+) {
+  const suggested = defaultQdrantCollectionName(input);
+  return promptEnvValue(rl, {
+    key: "QDRANT_COLLECTION",
+    current: env.QDRANT_COLLECTION,
+    suggested,
+    label: "Qdrant collection"
+  });
+}
+
+async function promptEnvValue(
+  rl: ReturnType<typeof createInterface>,
+  input: {
+    key: string;
+    current: string | undefined;
+    suggested: string;
+    label: string;
+  }
+) {
+  const current = input.current?.trim();
+  const prompt = current
+    ? `${input.label} (${input.key}) is set to "${current}". Press Enter to keep it, type "auto" for "${input.suggested}", or type a new value: `
+    : `${input.label} (${input.key}) [${input.suggested}]: `;
+  const answer = (await rl.question(prompt)).trim();
+
+  if (!answer && current) {
+    return current;
+  }
+
+  if (!answer || answer.toLowerCase() === "auto") {
+    return input.suggested;
+  }
+
+  return answer;
 }
 
 async function choose<TValue>(
@@ -695,23 +770,22 @@ function isActiveProvider(
 }
 
 async function runSetupCommands() {
-  await runStep("Starting Postgres, Redis, and Qdrant", "docker", [
+  await runStep("Starting Centragent Docker Compose stack", "docker", [
     "compose",
     "up",
+    "--build",
     "-d"
   ]);
-  await runStep("Generating Prisma client", corepackCommand, [
-    "pnpm",
-    "db:generate"
-  ]);
-  await runStep("Applying database migrations", corepackCommand, [
-    "pnpm",
-    "db:deploy"
-  ]);
-  await runStep("Seeding singleton master user", corepackCommand, [
-    "pnpm",
-    "db:seed"
-  ]);
+}
+
+function printDockerStarted() {
+  console.log("\nCentragent is running through Docker Compose.");
+  console.log("Web: http://127.0.0.1:3000");
+  console.log("API: http://127.0.0.1:4000");
+  console.log("MCP: http://127.0.0.1:3001/mcp");
+  console.log("\nUseful commands:");
+  console.log("  docker compose logs -f api mcp web");
+  console.log("  docker compose down");
 }
 
 async function runStep(label: string, command: string, args: string[]) {
@@ -738,86 +812,8 @@ async function runStep(label: string, command: string, args: string[]) {
   });
 }
 
-async function startDevProcesses() {
-  console.log("\nStarting API, MCP, and web dev servers.");
-  console.log("Web: http://127.0.0.1:3000");
-  console.log("API: http://127.0.0.1:4000");
-  console.log("MCP: http://127.0.0.1:3001/mcp");
-  console.log("Press Ctrl+C to stop the dev processes. Docker services are left running.\n");
-
-  const children = [
-    startProcess("api", ["pnpm", "--filter", "@centragent/api", "dev"]),
-    startProcess("mcp", ["pnpm", "--filter", "@centragent/mcp", "dev"]),
-    startProcess("web", ["pnpm", "--filter", "@centragent/web", "dev"])
-  ];
-
-  const stopAll = () => {
-    for (const child of children) {
-      if (!child.killed) {
-        child.kill("SIGINT");
-      }
-    }
-  };
-
-  process.once("SIGINT", () => {
-    console.log("\nStopping Centragent dev processes...");
-    stopAll();
-  });
-
-  process.once("SIGTERM", () => {
-    stopAll();
-  });
-
-  await new Promise<void>((resolve) => {
-    let remaining = children.length;
-    for (const child of children) {
-      child.on("exit", () => {
-        remaining -= 1;
-        if (remaining === 0) {
-          resolve();
-        }
-      });
-    }
-  });
-}
-
-function startProcess(label: string, args: string[]) {
-  const child = spawn(corepackCommand, args, {
-    cwd: rootDir,
-    env: process.env,
-    shell: shouldUseWindowsShell(corepackCommand)
-  });
-
-  prefixStream(label, child.stdout);
-  prefixStream(label, child.stderr);
-
-  child.on("error", (error) => {
-    console.error(`[${label}] failed to start: ${error.message}`);
-  });
-
-  return child;
-}
-
 function shouldUseWindowsShell(command: string) {
   return isWindows && /\.(cmd|bat)$/i.test(command);
-}
-
-function prefixStream(
-  label: string,
-  stream: ChildProcessWithoutNullStreams["stdout"]
-) {
-  let buffer = "";
-  stream.on("data", (chunk: Buffer) => {
-    buffer += chunk.toString();
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? "";
-
-    for (const line of lines) {
-      if (line.trim()) {
-        console.log(`[${label}] ${line}`);
-      }
-    }
-  });
 }
 
 main().catch((error: Error) => {
