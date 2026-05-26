@@ -564,6 +564,7 @@ async function installCodexMcp(filePath: string, mcpUrl: string) {
   const existing = await fs.readFile(filePath, "utf8").catch(() => "");
   const block = [
     `[mcp_servers.${mcpServerName}]`,
+    `transport = "http"`,
     `url = ${quoteEnvValue(mcpUrl)}`,
     ""
   ].join("\n");
