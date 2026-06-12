@@ -190,6 +190,19 @@ export async function executeRun(
     })
     .catch(() => undefined);
 
+  // Surface a failure to the humans (the runner can post even when the tool
+  // itself couldn't run). No @mention → no propagation.
+  if (status !== "completed") {
+    const firstLine = ((error ?? "").split("\n")[0] ?? "").slice(0, 160);
+    const note =
+      status === "cancelled"
+        ? "I stopped early — a runtime cap was reached."
+        : `I couldn't respond just now — my tool failed to run${firstLine ? ` (${firstLine})` : ""}.`;
+    await ctx.backend
+      .request("/agent/messages", { method: "POST", body: { conversationId, content: `⚠️ ${note}` } })
+      .catch(() => undefined);
+  }
+
   // ACK LAST: a crash before this re-delivers, and the unique run row makes the
   // re-run a safe no-op (skip).
   await ack(ctx, deliveryIds);
