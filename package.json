@@ -16,6 +16,8 @@
     "mcp:dev": "corepack pnpm --filter @centragent/mcp dev",
     "mcp:stdio": "corepack pnpm --filter @centragent/mcp stdio",
     "web:dev": "corepack pnpm --filter @centragent/web dev",
+    "run:agents": "corepack pnpm --filter @centragent/runner start",
+    "run:agents:dev": "corepack pnpm --filter @centragent/runner dev",
     "db:generate": "corepack pnpm --filter @centragent/db db:generate",
     "db:push": "corepack pnpm --filter @centragent/db db:push",
     "db:setup": "corepack pnpm --filter @centragent/db db:setup",

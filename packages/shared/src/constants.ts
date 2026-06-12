@@ -115,6 +115,41 @@ export const AGENT_EVENT_DELIVERY_STATUSES = [
   "acknowledged"
 ] as const;
 
+// --- autonomy runtime -------------------------------------------------------
+
+export const AUTONOMY_STATES = [
+  "active",
+  "paused",
+  "requires_approval",
+  "disabled"
+] as const;
+export type AutonomyState = (typeof AUTONOMY_STATES)[number];
+
+export const AGENT_RUN_STATUSES = [
+  "running",
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted"
+] as const;
+export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
+
+export const AGENT_RUN_TRIGGERS = [
+  "mention",
+  "handoff_requested",
+  "task_assigned",
+  "manual"
+] as const;
+
+// Event types that should wake a runner and trigger an agent reaction.
+export const AUTONOMY_TRIGGER_EVENT_TYPES = [
+  "mention",
+  "handoff_requested",
+  "task_assigned"
+] as const;
+
+export const SYSTEM_FLAG_AUTONOMY = "autonomy_enabled";
+
 export const MESSAGE_SENDER_TYPES = ["user", "agent", "system", "tool"] as const;
 export const MESSAGE_ROLES = ["user", "assistant", "system", "tool"] as const;
 export const MESSAGE_STATUSES = ["complete", "streaming", "failed"] as const;

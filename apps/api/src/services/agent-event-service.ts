@@ -10,6 +10,7 @@ import {
 } from "@centragent/shared";
 import type { Principal } from "../auth/principal.js";
 import { forbidden, notFound } from "../errors.js";
+import type { AgentChain, AutonomyGuard } from "./autonomy-guard.js";
 import type { MembershipService } from "./membership-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
@@ -20,6 +21,7 @@ type MessageForMentions = {
   senderAgentId: string | null;
   senderUserId: string | null;
   content: string;
+  chain: AgentChain;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -45,6 +47,7 @@ export class AgentEventService {
     private readonly prisma: PrismaClient,
     private readonly memberships: MembershipService,
     private readonly realtime: RealtimeService,
+    private readonly guard: AutonomyGuard,
     private readonly log: FastifyBaseLogger
   ) {}
 
@@ -71,6 +74,28 @@ export class AgentEventService {
         continue;
       }
 
+      // Autonomy choke point: gate agent→agent mentions. Human mentions pass.
+      const verdict = await this.guard.evaluate({
+        conversationId: message.conversationId,
+        senderType: message.senderType,
+        senderAgentId: message.senderAgentId,
+        targetAgentId: target.agentId,
+        chain: message.chain
+      });
+      if (!verdict.allow) {
+        if (verdict.pause) {
+          await this.guard.pauseConversation(
+            message.conversationId,
+            verdict.reason ?? "autonomy paused"
+          );
+        }
+        this.log.info(
+          { conversationId: message.conversationId, targetAgentId: target.agentId, reason: verdict.reason },
+          "autonomy mention suppressed"
+        );
+        continue;
+      }
+
       const event = await this.prisma.agentEvent.create({
         data: {
           type: "mention",
@@ -82,7 +107,7 @@ export class AgentEventService {
           targetMembershipId: target.id,
           title: `${target.agent.name} was mentioned`,
           content: message.content,
-          data: { handle: target.agent.handle, source: "message" },
+          data: { handle: target.agent.handle, source: "message", chainDepth: message.chain.depth },
           deliveries: {
             create: {
               agentId: target.agentId,
@@ -351,6 +376,15 @@ export class AgentEventService {
       while (Date.now() < deadline) {
         if (signal?.aborted) {
           return { events: [], pendingCount: 0, status: "cancelled" };
+        }
+        if (await this.guard.isKilled()) {
+          return {
+            events: [],
+            pendingCount: 0,
+            status: "autonomy_paused",
+            recommendedNextAction:
+              "Autonomy is globally disabled. Idle and retry later, or wait for resume."
+          };
         }
         const inbox = await this.syncInbox(principal, {
           limit: input.limit,

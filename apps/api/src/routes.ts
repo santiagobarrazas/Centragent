@@ -3,7 +3,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   acceptInviteSchema,
   ackAgentEventsSchema,
+  adminAutonomySchema,
   agentPresenceSchema,
+  createAgentRunSchema,
   createAgentSchema,
   createAssetSchema,
   createConversationSchema,
@@ -19,8 +21,10 @@ import {
   loginSchema,
   messagePaginationQuerySchema,
   noteAppendSchema,
+  patchAgentRunSchema,
   readConversationSchema,
   rejectJoinRequestSchema,
+  reportUsageSchema,
   requestJoinConversationSchema,
   searchMemorySchema,
   sendAgentMessageSchema,
@@ -29,6 +33,7 @@ import {
   startAgentActivitySchema,
   syncAgentInboxSchema,
   updateAgentSchema,
+  updateConversationAutonomySchema,
   updateDocumentSchema,
   waitForAgentEventsSchema
 } from "@centragent/shared";
@@ -443,6 +448,71 @@ export async function registerRoutes(app: FastifyInstance, services: Services) {
       lifecycle.complete();
       throw error;
     }
+  });
+
+  // --- autonomy runtime (runner) --------------------------------------------
+
+  app.post("/agent/runs", async (request, reply) => {
+    const principal = requirePrincipal(request);
+    const body = parse(createAgentRunSchema, request.body);
+    const result = await services.agentRuns.create(principal, body);
+    return reply.code(201).send(result);
+  });
+
+  app.patch("/agent/runs/:runId", async (request) => {
+    const principal = requirePrincipal(request);
+    const params = parse(idParam("runId"), request.params);
+    const body = parse(patchAgentRunSchema, request.body);
+    return services.agentRuns.patch(principal, params.runId, body);
+  });
+
+  app.get("/conversations/:conversationId/runs", async (request) => {
+    const principal = requirePrincipal(request);
+    const params = parse(idParam("conversationId"), request.params);
+    return services.agentRuns.list(principal, params.conversationId);
+  });
+
+  app.post("/agent/usage", async (request) => {
+    const principal = requirePrincipal(request);
+    const body = parse(reportUsageSchema, request.body);
+    if (actorType(principal) !== "agent" || !principal.agentId) {
+      throw badRequest("Usage reporting requires an agent token");
+    }
+    return services.autonomyGuard.recordUsage({
+      conversationId: body.conversationId,
+      agentId: principal.agentId,
+      runId: body.runId ?? null,
+      deliveryId: body.deliveryId ?? null,
+      model: body.model,
+      promptTokens: body.promptTokens,
+      completionTokens: body.completionTokens
+    });
+  });
+
+  // --- autonomy controls (humans) -------------------------------------------
+
+  app.get("/admin/autonomy", async (request) => {
+    requirePrincipal(request);
+    return { killed: await services.autonomyGuard.isKilled() };
+  });
+
+  app.post("/admin/autonomy/kill", async (request) => {
+    requireUserPrincipal(request);
+    parse(adminAutonomySchema, request.body ?? {});
+    return services.autonomyGuard.setGloballyEnabled(false);
+  });
+
+  app.post("/admin/autonomy/resume", async (request) => {
+    requireUserPrincipal(request);
+    parse(adminAutonomySchema, request.body ?? {});
+    return services.autonomyGuard.setGloballyEnabled(true);
+  });
+
+  app.patch("/conversations/:conversationId/autonomy", async (request) => {
+    const principal = requirePrincipal(request);
+    const params = parse(idParam("conversationId"), request.params);
+    const body = parse(updateConversationAutonomySchema, request.body);
+    return services.conversations.updateAutonomy(principal, params.conversationId, body);
   });
 
   // --- agent messaging via token --------------------------------------------

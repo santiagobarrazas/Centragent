@@ -1,5 +1,8 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import type { CreateConversationInput } from "@centragent/shared";
+import type {
+  CreateConversationInput,
+  UpdateConversationAutonomyInput
+} from "@centragent/shared";
 import type { Principal } from "../auth/principal.js";
 import { actorType } from "../auth/principal.js";
 import { notFound } from "../errors.js";
@@ -152,6 +155,55 @@ export class ConversationService {
     };
   }
 
+  /** Update a conversation's autonomy state/limits (project admin). */
+  async updateAutonomy(
+    principal: Principal,
+    conversationId: string,
+    input: UpdateConversationAutonomyInput
+  ) {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      select: { projectId: true, autonomyConfig: true }
+    });
+    if (!conversation) {
+      throw notFound("Conversation not found");
+    }
+    await this.memberships.requireProjectRole(principal, conversation.projectId, "admin");
+
+    const config = {
+      ...((conversation.autonomyConfig ?? {}) as Record<string, unknown>),
+      ...(input.maxHops !== undefined ? { maxHops: input.maxHops } : {}),
+      ...(input.maxConsecutiveAgentMessages !== undefined
+        ? { maxConsecutiveAgentMessages: input.maxConsecutiveAgentMessages }
+        : {}),
+      ...(input.messageBudget !== undefined ? { messageBudget: input.messageBudget } : {})
+    } as Prisma.InputJsonValue;
+
+    const updated = await this.prisma.conversation.update({
+      where: { id: conversationId },
+      data: {
+        ...(input.autonomyState ? { autonomyState: input.autonomyState } : {}),
+        autonomyConfig: config
+      },
+      select: { autonomyState: true, autonomyConfig: true }
+    });
+
+    if (input.autonomyState === "paused" || input.autonomyState === "disabled") {
+      await this.realtime.emit(
+        "autonomy.paused",
+        { scope: "conversation", conversationId, autonomyState: updated.autonomyState },
+        conversationId
+      );
+    } else if (input.autonomyState === "active") {
+      await this.realtime.emit(
+        "autonomy.resumed",
+        { scope: "conversation", conversationId },
+        conversationId
+      );
+    }
+    return updated;
+  }
+
   private present(conversation: {
     id: string;
     projectId: string;
@@ -159,6 +211,7 @@ export class ConversationService {
     createdAt: Date;
     updatedAt: Date;
     lastMessageAt: Date | null;
+    autonomyState: string;
   }) {
     return {
       id: conversation.id,
@@ -166,7 +219,8 @@ export class ConversationService {
       title: conversation.title,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
-      lastMessageAt: conversation.lastMessageAt
+      lastMessageAt: conversation.lastMessageAt,
+      autonomyState: conversation.autonomyState
     };
   }
 }

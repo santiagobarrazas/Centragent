@@ -21,6 +21,10 @@ export type RealtimeEventName =
   | "agent.activity.finished"
   | "agent.event.created"
   | "agent.event.acknowledged"
+  | "agent.run.started"
+  | "agent.run.finished"
+  | "autonomy.paused"
+  | "autonomy.resumed"
   | "memory.indexed";
 
 export type RealtimeEnvelope<TPayload = unknown> = {
@@ -39,3 +43,6 @@ export const joinRequestRedisChannel = (joinRequestId: string) =>
 
 export const agentEventsRedisChannel = (agentId: string) =>
   `centragent:agent-events:${agentId}`;
+
+// Broadcast channel for the global autonomy kill switch (instant across replicas).
+export const AUTONOMY_REDIS_CHANNEL = "centragent:autonomy";

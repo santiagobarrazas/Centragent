@@ -216,16 +216,19 @@ model ProjectInvite {
 }
 
 model Conversation {
-  id            String    @id @default(uuid()) @db.Uuid
-  projectId     String    @map("project_id") @db.Uuid
-  title         String
+  id             String    @id @default(uuid()) @db.Uuid
+  projectId      String    @map("project_id") @db.Uuid
+  title          String
   // Race-free per-conversation message sequence allocator (UPDATE ... RETURNING).
-  messageSeq    Int       @default(0) @map("message_seq")
-  createdById   String?   @map("created_by_id") @db.Uuid
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
-  lastMessageAt DateTime? @map("last_message_at")
-  archivedAt    DateTime? @map("archived_at")
+  messageSeq     Int       @default(0) @map("message_seq")
+  createdById    String?   @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  lastMessageAt  DateTime? @map("last_message_at")
+  archivedAt     DateTime? @map("archived_at")
+  // Autonomy: active | paused | requires_approval | disabled.
+  autonomyState  String    @default("active") @map("autonomy_state")
+  autonomyConfig Json      @default("{}") @map("autonomy_config")
 
   project      Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   memberships  Membership[]
@@ -235,6 +238,7 @@ model Conversation {
   agentEvents  AgentEvent[]
   presences    AgentPresence[]
   joinRequests JoinRequest[]
+  agentRuns    AgentRun[]
   qdrantMemory QdrantMemory[]
 
   @@index([projectId, lastMessageAt])
@@ -252,6 +256,8 @@ model Agent {
   description        String? // short blurb; the agent_profile doc holds the long .md
   // Per-agent toggle: may the agent edit its own private notes? (req 2)
   notesAgentEditable Boolean   @default(false) @map("notes_agent_editable")
+  // When false, the agent does not auto-react (autonomy off for just this agent).
+  autonomyEnabled    Boolean   @default(true) @map("autonomy_enabled")
   clientInstanceId   String?   @map("client_instance_id")
   config             Json      @default("{}")
   lastSeenAt         DateTime? @map("last_seen_at")
@@ -268,6 +274,7 @@ model Agent {
   eventDeliveries  AgentEventDelivery[]
   targetedEvents   AgentEvent[]         @relation("AgentEventTargetAgent")
   joinRequests     JoinRequest[]
+  agentRuns        AgentRun[]
   sentMessages     Message[]            @relation("MessageSenderAgent")
   qdrantMemory     QdrantMemory[]
 
@@ -565,4 +572,66 @@ model QdrantMemory {
   @@index([messageId])
   @@index([scopeType])
   @@map("qdrant_memory")
+}
+
+// ---------------------------------------------------------------------------
+// Autonomy runtime: durable agent reactions + governance
+// ---------------------------------------------------------------------------
+
+// One reaction by an agent to an inbox event. `triggerDeliveryId` is unique so a
+// runner restart / redelivery cannot double-run. The chain is derived
+// server-side from the triggering message (never trusted from the runner).
+model AgentRun {
+  id                String    @id @default(uuid()) @db.Uuid
+  agentId           String    @map("agent_id") @db.Uuid
+  conversationId    String    @map("conversation_id") @db.Uuid
+  triggerDeliveryId String    @unique @map("trigger_delivery_id") @db.Uuid
+  triggerMessageId  String?   @map("trigger_message_id") @db.Uuid
+  status            String    @default("running") // running | completed | failed | cancelled | interrupted
+  trigger           String // mention | handoff_requested | task_assigned | manual
+  provider          String
+  // Server-derived agent-to-agent hop chain this run is responding at.
+  chainDepth        Int       @default(0) @map("chain_depth")
+  chainAgentIds     String[]  @default([]) @map("chain_agent_ids")
+  rootMessageId     String?   @map("root_message_id") @db.Uuid
+  sessionId         String?   @map("session_id")
+  costUsd           Decimal?  @map("cost_usd") @db.Decimal(10, 4)
+  turns             Int?
+  error             String?
+  startedAt         DateTime  @default(now()) @map("started_at")
+  finishedAt        DateTime? @map("finished_at")
+
+  agent        Agent        @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([agentId, status])
+  @@index([conversationId, status])
+  @@map("agent_runs")
+}
+
+// Global runtime flags (e.g. the autonomy kill switch). Durable + cached.
+model SystemFlag {
+  key       String   @id
+  valueBool Boolean? @map("value_bool")
+  valueJson Json?    @map("value_json")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("system_flags")
+}
+
+// Append-only usage ledger for autonomy cost visibility / budgets.
+model AutonomyUsage {
+  id               String   @id @default(uuid()) @db.Uuid
+  conversationId   String   @map("conversation_id") @db.Uuid
+  agentId          String   @map("agent_id") @db.Uuid
+  runId            String?  @map("run_id") @db.Uuid
+  model            String
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  usdCents         Int      @default(0) @map("usd_cents")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([conversationId, createdAt])
+  @@index([agentId, createdAt])
+  @@map("autonomy_usage")
 }

@@ -9,7 +9,9 @@ import { config } from "./config.js";
 import { registerRoutes } from "./routes.js";
 import { createAuthPreHandler } from "./middleware/auth.js";
 import { AgentEventService } from "./services/agent-event-service.js";
+import { AgentRunService } from "./services/agent-run-service.js";
 import { AgentService } from "./services/agent-service.js";
+import { AutonomyGuard } from "./services/autonomy-guard.js";
 import { AuthService } from "./services/auth-service.js";
 import { ConversationService } from "./services/conversation-service.js";
 import { DocumentService } from "./services/document-service.js";
@@ -98,13 +100,22 @@ const documents = new DocumentService(prisma, memberships, qdrantMemory, realtim
 const projects = new ProjectService(prisma, memberships, documents, realtime);
 const agents = new AgentService(prisma, memberships, projects, documents, realtime);
 const conversations = new ConversationService(prisma, memberships, documents, realtime);
-const agentEvents = new AgentEventService(prisma, memberships, realtime, app.log);
+const autonomyGuard = new AutonomyGuard(prisma, realtime, config, app.log);
+const agentEvents = new AgentEventService(
+  prisma,
+  memberships,
+  realtime,
+  autonomyGuard,
+  app.log
+);
+const agentRuns = new AgentRunService(prisma, memberships, realtime);
 const messages = new MessageService(
   prisma,
   memberships,
   realtime,
   qdrantMemory,
   agentEvents,
+  agentRuns,
   app.log
 );
 const joinRequests = new JoinRequestService(prisma, memberships, realtime, app.log);
@@ -123,6 +134,8 @@ const services: Services = {
   conversations,
   agents,
   agentEvents,
+  agentRuns,
+  autonomyGuard,
   messages,
   joinRequests
 };

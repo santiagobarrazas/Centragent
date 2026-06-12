@@ -134,6 +134,9 @@ export class AgentService {
         ...(input.description !== undefined ? { description: input.description } : {}),
         ...(input.notesAgentEditable !== undefined
           ? { notesAgentEditable: input.notesAgentEditable }
+          : {}),
+        ...(input.autonomyEnabled !== undefined
+          ? { autonomyEnabled: input.autonomyEnabled }
           : {})
       }
     });
@@ -176,6 +179,7 @@ export class AgentService {
       provider: string;
       description: string | null;
       notesAgentEditable: boolean;
+      autonomyEnabled: boolean;
       lastSeenAt: Date | null;
       createdAt: Date;
       presences?: Array<{
@@ -196,7 +200,9 @@ export class AgentService {
       description: agent.description,
       lastSeenAt: agent.lastSeenAt,
       createdAt: agent.createdAt,
-      ...(includeToggles ? { notesAgentEditable: agent.notesAgentEditable } : {}),
+      ...(includeToggles
+        ? { notesAgentEditable: agent.notesAgentEditable, autonomyEnabled: agent.autonomyEnabled }
+        : {}),
       presence: agent.presences?.[0]
         ? {
             status: agent.presences[0].status,

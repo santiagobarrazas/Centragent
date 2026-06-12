@@ -5,6 +5,9 @@ import {
   AGENT_PRESENCE_STATUSES,
   AGENT_PROVIDERS,
   AGENT_ROLES,
+  AGENT_RUN_STATUSES,
+  AGENT_RUN_TRIGGERS,
+  AUTONOMY_STATES,
   DOCUMENT_KINDS,
   MEMORY_SCOPE_TYPES,
   MESSAGE_ROLES,
@@ -72,7 +75,45 @@ export const createAgentSchema = z.object({
 export const updateAgentSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   description: z.string().trim().max(2000).optional(),
-  notesAgentEditable: z.boolean().optional()
+  notesAgentEditable: z.boolean().optional(),
+  autonomyEnabled: z.boolean().optional()
+});
+
+// --- autonomy runtime -------------------------------------------------------
+
+export const createAgentRunSchema = z.object({
+  triggerDeliveryId: z.string().uuid(),
+  conversationId: z.string().uuid(),
+  trigger: z.enum(AGENT_RUN_TRIGGERS).default("mention"),
+  provider: z.enum(AGENT_PROVIDERS).default("custom")
+});
+
+export const patchAgentRunSchema = z.object({
+  status: z.enum(AGENT_RUN_STATUSES),
+  costUsd: z.coerce.number().min(0).optional(),
+  turns: z.coerce.number().int().min(0).optional(),
+  sessionId: z.string().max(256).optional(),
+  error: z.string().max(2000).optional()
+});
+
+export const reportUsageSchema = z.object({
+  conversationId: z.string().uuid(),
+  deliveryId: z.string().uuid().optional(),
+  runId: z.string().uuid().optional(),
+  model: z.string().trim().min(1).max(120),
+  promptTokens: z.coerce.number().int().min(0).default(0),
+  completionTokens: z.coerce.number().int().min(0).default(0)
+});
+
+export const updateConversationAutonomySchema = z.object({
+  autonomyState: z.enum(AUTONOMY_STATES).optional(),
+  maxHops: z.coerce.number().int().min(0).max(50).optional(),
+  maxConsecutiveAgentMessages: z.coerce.number().int().min(1).max(200).optional(),
+  messageBudget: z.coerce.number().int().min(0).max(10000).optional()
+});
+
+export const adminAutonomySchema = z.object({
+  reason: z.string().trim().max(500).optional()
 });
 
 // --- projects ---------------------------------------------------------------
@@ -321,3 +362,10 @@ export type AckAgentEventsInput = z.infer<typeof ackAgentEventsSchema>;
 export type WaitForAgentEventsInput = z.infer<typeof waitForAgentEventsSchema>;
 export type AssignTaskInput = z.infer<typeof assignTaskSchema>;
 export type RequestHandoffInput = z.infer<typeof requestHandoffSchema>;
+export type CreateAgentRunInput = z.infer<typeof createAgentRunSchema>;
+export type PatchAgentRunInput = z.infer<typeof patchAgentRunSchema>;
+export type ReportUsageInput = z.infer<typeof reportUsageSchema>;
+export type UpdateConversationAutonomyInput = z.infer<
+  typeof updateConversationAutonomySchema
+>;
+export type AdminAutonomyInput = z.infer<typeof adminAutonomySchema>;

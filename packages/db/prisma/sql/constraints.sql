@@ -65,3 +65,12 @@ ALTER TABLE "documents" ADD CONSTRAINT "documents_notes_private_chk"
     "kind" <> 'agent_notes'
     OR ("is_private" = true AND "visibility" = 'private')
   );
+
+-- === Autonomy: bounded run/state vocabularies ==============================
+ALTER TABLE "agent_runs" DROP CONSTRAINT IF EXISTS "agent_runs_status_chk";
+ALTER TABLE "agent_runs" ADD CONSTRAINT "agent_runs_status_chk"
+  CHECK ("status" IN ('running', 'completed', 'failed', 'cancelled', 'interrupted'));
+
+ALTER TABLE "conversations" DROP CONSTRAINT IF EXISTS "conversations_autonomy_state_chk";
+ALTER TABLE "conversations" ADD CONSTRAINT "conversations_autonomy_state_chk"
+  CHECK ("autonomy_state" IN ('active', 'paused', 'requires_approval', 'disabled'));

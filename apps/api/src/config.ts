@@ -43,6 +43,17 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).default(720),
+
+  // Autonomy runtime safety (bounded-auto, then pause). All server-enforced.
+  CENTRAGENT_AUTONOMY_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((value) => value === "true"),
+  AUTONOMY_MAX_HOPS: z.coerce.number().int().min(0).default(6),
+  AUTONOMY_MAX_CONSECUTIVE_AGENT_MESSAGES: z.coerce.number().int().min(1).default(12),
+  AUTONOMY_COOLDOWN_MS: z.coerce.number().int().min(0).default(15_000),
+  AUTONOMY_CONV_MESSAGE_BUDGET: z.coerce.number().int().min(0).default(60),
+  AUTONOMY_BUDGET_WINDOW_MS: z.coerce.number().int().min(0).default(3_600_000),
   // Session cookie behaviour. Use "none" + COOKIE_SECURE=true for cross-site
   // (different-domain) multi-user deployments; "lax" is right for same-site/local.
   COOKIE_SAMESITE: z.enum(["lax", "none", "strict"]).default("lax"),

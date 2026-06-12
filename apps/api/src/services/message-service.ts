@@ -7,6 +7,8 @@ import {
 import type { Principal } from "../auth/principal.js";
 import { actorType } from "../auth/principal.js";
 import type { AgentEventService } from "./agent-event-service.js";
+import type { AgentRunService } from "./agent-run-service.js";
+import { freshChain, type AgentChain } from "./autonomy-guard.js";
 import type { MembershipService } from "./membership-service.js";
 import type { QdrantMemoryService } from "./qdrant-memory-service.js";
 import type { RealtimeService } from "./realtime-service.js";
@@ -25,6 +27,7 @@ export class MessageService {
     private readonly realtime: RealtimeService,
     private readonly qdrantMemory: QdrantMemoryService,
     private readonly agentEvents: AgentEventService,
+    private readonly agentRuns: AgentRunService,
     private readonly log: FastifyBaseLogger
   ) {}
 
@@ -38,6 +41,26 @@ export class MessageService {
     const { projectId, membership } =
       await this.memberships.resolveParticipantMembership(principal, conversationId);
     const isAgent = actorType(principal) === "agent";
+
+    // Server-derived agent-to-agent hop chain. An agent replying inside an active
+    // run extends that run's chain; everything else starts fresh (human = depth 0).
+    let agentChain: AgentChain;
+    if (isAgent && principal.agentId) {
+      const activeRun = await this.agentRuns.findActiveRun(principal.agentId, conversationId);
+      agentChain = activeRun
+        ? {
+            depth: activeRun.chainDepth + 1,
+            agentIds: [...activeRun.chainAgentIds, principal.agentId],
+            rootMessageId: activeRun.rootMessageId
+          }
+        : freshChain(null, principal.agentId);
+    } else {
+      agentChain = freshChain(null);
+    }
+    const messageMetadata = {
+      ...(metadata ?? {}),
+      agentChain
+    } as Prisma.InputJsonValue;
 
     const message = await this.prisma.$transaction(async (tx) => {
       // Race-free per-conversation sequence allocation.
@@ -62,7 +85,7 @@ export class MessageService {
           status: "complete",
           content,
           sequenceNumber,
-          metadata: (metadata ?? {}) as Prisma.InputJsonValue
+          metadata: messageMetadata
         },
         include: messageInclude
       });
@@ -97,7 +120,8 @@ export class MessageService {
         senderType: message.senderType,
         senderAgentId: message.senderAgentId,
         senderUserId: message.senderUserId,
-        content
+        content,
+        chain: agentChain
       });
     } catch (error) {
       this.log.warn(
