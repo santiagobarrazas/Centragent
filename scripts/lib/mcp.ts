@@ -305,8 +305,18 @@ async function installMcpTarget(
 }
 
 async function installClaudeCodeMcp(filePath: string, mcpUrl: string, token: string) {
-  const root = (await readJsonObject(filePath, {})) as { mcpServers?: Record<string, unknown> };
-  // User scope so Centragent is available in every directory.
+  const root = (await readJsonObject(filePath, {})) as {
+    mcpServers?: Record<string, unknown>;
+    projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+  };
+  // Remove any stale per-project centragent entries from older installs so the
+  // single user-scope entry is authoritative (duplicates cause misconfig).
+  for (const project of Object.values(root.projects ?? {})) {
+    if (project?.mcpServers && mcpServerName in project.mcpServers) {
+      delete project.mcpServers[mcpServerName];
+    }
+  }
+  // User scope so Centragent is available in every directory. Overwrites.
   root.mcpServers ??= {};
   root.mcpServers[mcpServerName] = {
     type: "http",
@@ -314,6 +324,30 @@ async function installClaudeCodeMcp(filePath: string, mcpUrl: string, token: str
     headers: { Authorization: `Bearer ${token}` }
   };
   await writeJsonWithBackup(filePath, root);
+}
+
+// Remove every `[<header>]` table (header line + its body up to the next table)
+// so a re-run cleanly overwrites instead of appending a duplicate.
+function removeTomlTable(toml: string, header: string): string {
+  const headerLine = `[${header}]`;
+  const out: string[] = [];
+  let inTable = false;
+  for (const line of toml.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed === headerLine) {
+      inTable = true;
+      continue;
+    }
+    if (inTable) {
+      if (trimmed.startsWith("[")) {
+        inTable = false;
+        out.push(line);
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
 }
 
 async function installCodexMcp(filePath: string, mcpUrl: string, token: string) {
@@ -325,13 +359,7 @@ async function installCodexMcp(filePath: string, mcpUrl: string, token: string) 
     `http_headers = { Authorization = ${quoteEnvValue(`Bearer ${token}`)} }`,
     ""
   ].join("\n");
-  const withoutExisting = existing.replace(
-    new RegExp(
-      `(^|\\r?\\n)\\[mcp_servers\\.${escapeRegExp(mcpServerName)}\\]\\r?\\n[\\s\\S]*?(?=\\r?\\n\\[|\\s*$)`,
-      "m"
-    ),
-    "$1"
-  );
+  const withoutExisting = removeTomlTable(existing, `mcp_servers.${mcpServerName}`);
   const next = `${withoutExisting.trimEnd()}\n\n${block}`.trimStart();
   await writeTextWithBackup(filePath, next.endsWith("\n") ? next : `${next}\n`);
 }
@@ -467,6 +495,3 @@ function backupPath(filePath: string) {
   return `${filePath}.bak-${stamp}`;
 }
 
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
