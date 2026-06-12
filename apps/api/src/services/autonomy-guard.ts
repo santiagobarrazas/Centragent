@@ -10,6 +10,9 @@ export type AgentChain = {
   depth: number;
   agentIds: string[];
   rootMessageId: string | null;
+  // Marks a sub-chain that originated from a "request declined" notice, so the
+  // caller's acknowledgment gets exactly +1 hop and cannot trigger a storm.
+  declineNotice?: boolean;
 };
 
 export const freshChain = (
@@ -29,7 +32,13 @@ export type GuardInput = {
   chain: AgentChain;
 };
 
-export type GuardResult = { allow: boolean; reason?: string; pause?: boolean };
+export type GuardResult = {
+  allow: boolean;
+  reason?: string;
+  pause?: boolean;
+  // When true, the caller should be told (a system "declined" notice is posted).
+  notify?: boolean;
+};
 
 /**
  * The single authoritative choke point for agent-to-agent autonomy. Evaluated at
@@ -106,10 +115,11 @@ export class AutonomyGuard {
 
     const target = await this.prisma.agent.findUnique({
       where: { id: input.targetAgentId },
-      select: { autonomyEnabled: true }
+      select: { autonomyEnabled: true, name: true }
     });
     if (!target?.autonomyEnabled) {
-      return { allow: false, reason: "the mentioned agent has autonomy disabled" };
+      // The caller is told (and acknowledges) — this is not a silent drop.
+      return { allow: false, reason: "is not available to receive requests right now", notify: true };
     }
 
     const cfg = (conversation.autonomyConfig ?? {}) as {
@@ -118,20 +128,31 @@ export class AutonomyGuard {
       messageBudget?: number;
     };
 
+    // Defaults scale with team size (more agents → longer legitimate chains),
+    // clamped so cost stays bounded. Explicit per-conversation overrides win.
+    const agentCount = await this.prisma.membership.count({
+      where: { conversationId: input.conversationId, principalType: "agent", status: "active" }
+    });
+    const scaledHops = Math.min(Math.max(this.config.AUTONOMY_MAX_HOPS, agentCount * 2), 24);
+    const scaledConsec = Math.min(
+      Math.max(this.config.AUTONOMY_MAX_CONSECUTIVE_AGENT_MESSAGES, agentCount * 2),
+      40
+    );
+
     // Hop depth (server-derived) — the primary loop bound.
-    const maxHops = cfg.maxHops ?? this.config.AUTONOMY_MAX_HOPS;
+    const maxHops = cfg.maxHops ?? scaledHops;
     if (input.chain.depth >= maxHops) {
       return {
         allow: false,
-        reason: `agent-to-agent hop limit reached (${maxHops})`,
-        pause: true
+        reason: `couldn't be reached — the agent-to-agent hop limit was reached (${maxHops})`,
+        pause: true,
+        notify: true
       };
     }
 
     // Consecutive agent messages since the last human/system message — the
     // dead-simple catch-all that bounds runaway even if chain logic fails.
-    const maxConsec =
-      cfg.maxConsecutiveAgentMessages ?? this.config.AUTONOMY_MAX_CONSECUTIVE_AGENT_MESSAGES;
+    const maxConsec = cfg.maxConsecutiveAgentMessages ?? scaledConsec;
     const consecutive = await this.consecutiveAgentMessages(input.conversationId);
     if (consecutive >= maxConsec) {
       return {

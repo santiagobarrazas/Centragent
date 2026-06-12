@@ -56,6 +56,14 @@ export class AgentRunService {
       ((triggerMessage?.metadata as { agentChain?: AgentChain } | null)?.agentChain) ??
       freshChain(triggerMessage?.id ?? null);
 
+    // Continuity: resume the agent's most recent tool session in this
+    // conversation so it keeps thread context (and the tool compacts its own).
+    const lastSession = await this.prisma.agentRun.findFirst({
+      where: { agentId, conversationId: input.conversationId, sessionId: { not: null } },
+      orderBy: { startedAt: "desc" },
+      select: { sessionId: true }
+    });
+
     const run = await this.prisma.agentRun.create({
       data: {
         agentId,
@@ -67,7 +75,8 @@ export class AgentRunService {
         provider: input.provider,
         chainDepth: parentChain.depth,
         chainAgentIds: parentChain.agentIds,
-        rootMessageId: parentChain.rootMessageId
+        rootMessageId: parentChain.rootMessageId,
+        declineNotice: parentChain.declineNotice ?? false
       }
     });
 
@@ -76,7 +85,7 @@ export class AgentRunService {
       { id: run.id, agentId, conversationId: input.conversationId, trigger: run.trigger },
       input.conversationId
     );
-    return { runId: run.id, sessionId: null as string | null, skip: false };
+    return { runId: run.id, sessionId: lastSession?.sessionId ?? null, skip: false };
   }
 
   async patch(principal: Principal, runId: string, input: PatchAgentRunInput) {

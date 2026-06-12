@@ -33,7 +33,10 @@ const makeGuard = (opts: Opts = {}) => {
         autonomyConfig: {}
       })
     },
-    agent: { findUnique: async () => ({ autonomyEnabled: opts.targetEnabled ?? true }) },
+    agent: {
+      findUnique: async () => ({ autonomyEnabled: opts.targetEnabled ?? true, name: "Target" })
+    },
+    membership: { count: async () => 2 },
     agentEvent: { findFirst: async () => (opts.recentMention ? { id: "x" } : null) },
     message: {
       findFirst: async () => null,

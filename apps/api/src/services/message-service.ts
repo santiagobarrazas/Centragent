@@ -51,7 +51,8 @@ export class MessageService {
         ? {
             depth: activeRun.chainDepth + 1,
             agentIds: [...activeRun.chainAgentIds, principal.agentId],
-            rootMessageId: activeRun.rootMessageId
+            rootMessageId: activeRun.rootMessageId,
+            declineNotice: activeRun.declineNotice
           }
         : freshChain(null, principal.agentId);
     } else {
@@ -114,7 +115,7 @@ export class MessageService {
       this.log.warn({ error, messageId: message.id }, "Qdrant indexing failed");
     }
     try {
-      await this.agentEvents.createMentionsForMessage({
+      const result = await this.agentEvents.createMentionsForMessage({
         id: message.id,
         conversationId,
         senderType: message.senderType,
@@ -123,6 +124,22 @@ export class MessageService {
         content,
         chain: agentChain
       });
+      // Tell the caller (once per sub-chain) when its request was declined.
+      if (
+        isAgent &&
+        principal.agentId &&
+        !agentChain.declineNotice &&
+        result.declines.length > 0
+      ) {
+        await this.postDeclineNotice(
+          conversationId,
+          principal.agentId,
+          result.declines,
+          agentChain
+        ).catch((error) =>
+          this.log.warn({ error, conversationId }, "decline notice failed")
+        );
+      }
     } catch (error) {
       this.log.warn(
         { error, messageId: message.id },
@@ -131,6 +148,66 @@ export class MessageService {
     }
 
     return this.present(message);
+  }
+
+  // Post a tagged "request declined" notice the caller must acknowledge. The
+  // notice preserves the chain depth (so the ack is exactly +1) and flags the
+  // sub-chain so the acknowledgment cannot itself spawn another decline.
+  private async postDeclineNotice(
+    conversationId: string,
+    callerAgentId: string,
+    declines: Array<{ name: string; handle: string; reason: string }>,
+    parentChain: AgentChain
+  ) {
+    const caller = await this.prisma.agent.findUnique({
+      where: { id: callerAgentId },
+      select: { handle: true }
+    });
+    if (!caller) return;
+    const detail = declines.map((d) => `${d.name} (@${d.handle}) ${d.reason}`).join("; ");
+    const content = `@${caller.handle} ${detail}. Please acknowledge — let the user know or take another approach.`;
+    await this.postSystemMessage(conversationId, content, {
+      depth: parentChain.depth,
+      agentIds: parentChain.agentIds,
+      rootMessageId: parentChain.rootMessageId,
+      declineNotice: true
+    });
+  }
+
+  private async postSystemMessage(conversationId: string, content: string, chain: AgentChain) {
+    const message = await this.prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<Array<{ message_seq: number }>>(Prisma.sql`
+        UPDATE "conversations"
+        SET "message_seq" = "message_seq" + 1, "last_message_at" = now(), "updated_at" = now()
+        WHERE "id" = ${conversationId}::uuid
+        RETURNING "message_seq"
+      `);
+      return tx.message.create({
+        data: {
+          conversationId,
+          senderType: "system",
+          role: "system",
+          status: "complete",
+          content,
+          sequenceNumber: rows[0]?.message_seq ?? 1,
+          metadata: { agentChain: chain } as Prisma.InputJsonValue
+        },
+        include: messageInclude
+      });
+    });
+
+    await this.realtime.emit("message.created", this.present(message), conversationId);
+    // Deliver the @caller mention (system sender → always allowed) so the
+    // caller's runner reacts and acknowledges.
+    await this.agentEvents.createMentionsForMessage({
+      id: message.id,
+      conversationId,
+      senderType: "system",
+      senderAgentId: null,
+      senderUserId: null,
+      content,
+      chain
+    });
   }
 
   async list(

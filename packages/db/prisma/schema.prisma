@@ -594,6 +594,8 @@ model AgentRun {
   chainDepth        Int       @default(0) @map("chain_depth")
   chainAgentIds     String[]  @default([]) @map("chain_agent_ids")
   rootMessageId     String?   @map("root_message_id") @db.Uuid
+  // True when this run reacts to a "request declined" notice (caps the bypass).
+  declineNotice     Boolean   @default(false) @map("decline_notice")
   sessionId         String?   @map("session_id")
   costUsd           Decimal?  @map("cost_usd") @db.Decimal(10, 4)
   turns             Int?

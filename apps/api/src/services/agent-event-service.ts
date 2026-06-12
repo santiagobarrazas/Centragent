@@ -54,7 +54,7 @@ export class AgentEventService {
   async createMentionsForMessage(message: MessageForMentions) {
     const handles = mentionHandles(message.content);
     if (handles.length === 0) {
-      return [];
+      return { created: [], declines: [] };
     }
 
     const targets = await this.prisma.membership.findMany({
@@ -68,6 +68,7 @@ export class AgentEventService {
     });
 
     const created = [];
+    const declines: Array<{ name: string; handle: string; reason: string }> = [];
     for (const target of targets) {
       if (!target.agentId || !target.agent) continue;
       if (message.senderAgentId && target.agentId === message.senderAgentId) {
@@ -88,6 +89,14 @@ export class AgentEventService {
             message.conversationId,
             verdict.reason ?? "autonomy paused"
           );
+        }
+        // Notify the caller (and only once per sub-chain) that the request was declined.
+        if (verdict.notify && !message.chain.declineNotice) {
+          declines.push({
+            name: target.agent.name,
+            handle: target.agent.handle,
+            reason: verdict.reason ?? "is not available to receive requests"
+          });
         }
         this.log.info(
           { conversationId: message.conversationId, targetAgentId: target.agentId, reason: verdict.reason },
@@ -131,7 +140,7 @@ export class AgentEventService {
       });
     }
 
-    return created;
+    return { created, declines };
   }
 
   async setPresence(principal: Principal, input: AgentPresenceInput) {
