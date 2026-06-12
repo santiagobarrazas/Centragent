@@ -4,7 +4,8 @@ import dotenv from "dotenv";
 import { z } from "zod";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "../../../.env") });
+const repoRoot = path.resolve(__dirname, "../../..");
+dotenv.config({ path: path.resolve(repoRoot, ".env") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 dotenv.config();
 
@@ -13,9 +14,10 @@ const envSchema = z.object({
   // The MCP endpoint the spawned CLI tools call back into.
   CENTRAGENT_MCP_URL: z.string().url().default("http://127.0.0.1:3001/mcp"),
   // Where the launcher wrote each tool's agent token (provider -> {agentId, token}).
+  // Resolved against the repo root, not the runner's package cwd.
   CENTRAGENT_INSTALL_STATE: z
     .string()
-    .default(path.resolve(process.cwd(), ".centragent/install.json")),
+    .default(path.join(repoRoot, ".centragent", "install.json")),
   // Optional explicit overrides: "provider:token,provider:token".
   RUNNER_AGENT_TOKENS: z.string().optional(),
 

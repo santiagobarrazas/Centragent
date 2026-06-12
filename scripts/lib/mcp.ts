@@ -208,12 +208,23 @@ export async function installMcpTargets(
       if (options.tokens.mode === "fixed") {
         token = options.tokens.token;
       } else {
-        let entry = state[target];
-        if (!entry?.token) {
-          entry = await mintAgentToken(options.tokens.apiUrl, target);
-          state[target] = entry;
+        const apiUrl = options.tokens.apiUrl;
+        const existing = state[target];
+        // Self-heal: a cached token that no longer resolves (e.g. revoked, or a
+        // DB reset) is re-minted for the SAME agent so we don't proliferate.
+        const valid = existing?.token ? await validateToken(apiUrl, existing.token) : false;
+        if (valid && existing) {
+          token = existing.token;
+        } else {
+          const agentId = existing?.agentId ?? (await createAgent(apiUrl, target));
+          const minted = await mintTokenForAgent(
+            apiUrl,
+            agentId,
+            `${TOOL_LABELS[target]} @ ${rootDir}`
+          );
+          state[target] = { agentId, token: minted.token, prefix: minted.prefix };
+          token = minted.token;
         }
-        token = entry.token;
       }
       results.push(await installMcpTarget(target, options.mcpUrl, token));
     } catch (error) {
@@ -360,17 +371,38 @@ async function installOpencodeMcp(filePath: string, mcpUrl: string, token: strin
 
 // --- token minting + state --------------------------------------------------
 
-async function mintAgentToken(apiUrl: string, target: McpToolTarget): Promise<InstallEntry> {
+async function validateToken(apiUrl: string, token: string): Promise<boolean> {
+  try {
+    const response = await fetch(new URL("/whoami", apiUrl), {
+      headers: { authorization: `Bearer ${token}` }
+    });
+    if (!response.ok) return false;
+    const who = (await response.json()) as { impersonating?: unknown } | null;
+    return Boolean(who?.impersonating);
+  } catch {
+    return false;
+  }
+}
+
+async function createAgent(apiUrl: string, target: McpToolTarget): Promise<string> {
   const agent = (await postJson(`${apiUrl}/agents`, {
     name: TOOL_LABELS[target],
     provider: PROVIDER_FOR_TARGET[target]
   })) as { agent: { id: string } };
+  return agent.agent.id;
+}
+
+async function mintTokenForAgent(
+  apiUrl: string,
+  agentId: string,
+  label: string
+): Promise<{ token: string; prefix: string }> {
   const minted = (await postJson(`${apiUrl}/tokens`, {
     kind: "agent",
-    agentId: agent.agent.id,
-    label: `${TOOL_LABELS[target]} @ ${rootDir}`
+    agentId,
+    label
   })) as { token: string; tokenInfo: { prefix: string } };
-  return { agentId: agent.agent.id, token: minted.token, prefix: minted.tokenInfo.prefix };
+  return { token: minted.token, prefix: minted.tokenInfo.prefix };
 }
 
 async function postJson(url: string, body: unknown) {
