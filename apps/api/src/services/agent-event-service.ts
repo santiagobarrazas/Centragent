@@ -8,15 +8,17 @@ import {
   type SyncAgentInboxInput,
   type WaitForAgentEventsInput
 } from "@centragent/shared";
+import type { Principal } from "../auth/principal.js";
 import { forbidden, notFound } from "../errors.js";
+import type { MembershipService } from "./membership-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
 type MessageForMentions = {
   id: string;
   conversationId: string;
   senderType: string;
-  senderId: string | null;
-  conversationAgentId: string | null;
+  senderAgentId: string | null;
+  senderUserId: string | null;
   content: string;
 };
 
@@ -26,16 +28,22 @@ const mentionHandles = (content: string) => {
   const handles = new Set<string>();
   for (const match of content.matchAll(/@([a-zA-Z0-9][a-zA-Z0-9_-]{1,63})/g)) {
     const handle = match[1];
-    if (handle) {
-      handles.add(handle.toLowerCase());
-    }
+    if (handle) handles.add(handle.toLowerCase());
   }
   return [...handles];
+};
+
+const requireActingAgent = (principal: Principal): string => {
+  if (!principal.agentId) {
+    throw forbidden("This action requires an agent token");
+  }
+  return principal.agentId;
 };
 
 export class AgentEventService {
   constructor(
     private readonly prisma: PrismaClient,
+    private readonly memberships: MembershipService,
     private readonly realtime: RealtimeService,
     private readonly log: FastifyBaseLogger
   ) {}
@@ -46,20 +54,20 @@ export class AgentEventService {
       return [];
     }
 
-    const targets = await this.prisma.conversationAgent.findMany({
+    const targets = await this.prisma.membership.findMany({
       where: {
         conversationId: message.conversationId,
         status: "active",
-        agent: {
-          handle: { in: handles }
-        }
+        principalType: "agent",
+        agent: { handle: { in: handles } }
       },
       include: { agent: true }
     });
 
     const created = [];
     for (const target of targets) {
-      if (message.senderType === "agent" && target.agentId === message.senderId) {
+      if (!target.agentId || !target.agent) continue;
+      if (message.senderAgentId && target.agentId === message.senderAgentId) {
         continue;
       }
 
@@ -69,34 +77,27 @@ export class AgentEventService {
           conversationId: message.conversationId,
           messageId: message.id,
           actorType: message.senderType,
-          actorId: message.senderId,
+          actorId: message.senderAgentId ?? message.senderUserId,
           targetAgentId: target.agentId,
-          targetConversationAgentId: target.id,
+          targetMembershipId: target.id,
           title: `${target.agent.name} was mentioned`,
           content: message.content,
-          data: {
-            handle: target.agent.handle,
-            source: "message"
-          },
+          data: { handle: target.agent.handle, source: "message" },
           deliveries: {
             create: {
               agentId: target.agentId,
-              conversationAgentId: target.id,
+              membershipId: target.id,
               status: "pending"
             }
           }
         },
-        include: {
-          deliveries: true,
-          targetAgent: true,
-          targetConversationAgent: true
-        }
+        include: { deliveries: true, targetAgent: true }
       });
 
       created.push(event);
       await this.realtime.emit(
         "agent.event.created",
-        event,
+        { id: event.id, type: event.type, targetAgentId: event.targetAgentId },
         message.conversationId
       );
       await this.realtime.publishAgentEvent(target.agentId, {
@@ -108,105 +109,116 @@ export class AgentEventService {
     return created;
   }
 
-  async setPresence(input: AgentPresenceInput) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
+  async setPresence(principal: Principal, input: AgentPresenceInput) {
+    const agentId = requireActingAgent(principal);
+    const membership = await this.memberships.requireAgentConversationMembership(
+      agentId,
+      input.conversationId
     );
+    return this.writePresence(membership.id, agentId, input);
+  }
+
+  private async writePresence(
+    membershipId: string,
+    agentId: string,
+    input: AgentPresenceInput,
+    overrideTitle?: string | null
+  ) {
     const now = new Date();
     const metadata = (input.metadata ?? {}) as Prisma.InputJsonValue;
+    const activityTitle =
+      overrideTitle !== undefined ? overrideTitle : input.activityTitle ?? null;
 
     const presence = await this.prisma.agentPresence.upsert({
-      where: { agentId: membership.agentId },
+      where: { membershipId },
       create: {
-        agentId: membership.agentId,
+        membershipId,
+        agentId,
+        conversationId: input.conversationId,
         status: input.status,
         statusMessage: input.statusMessage ?? null,
-        activeConversationId: membership.conversationId,
-        activeConversationAgentId: membership.id,
-        activityTitle: input.activityTitle ?? null,
+        activityTitle,
         metadata,
         lastSeenAt: now
       },
       update: {
         status: input.status,
         statusMessage: input.statusMessage ?? null,
-        activeConversationId: membership.conversationId,
-        activeConversationAgentId: membership.id,
-        activityTitle: input.activityTitle ?? null,
+        activityTitle,
         metadata,
         lastSeenAt: now
       }
     });
 
     await this.prisma.agent.update({
-      where: { id: membership.agentId },
+      where: { id: agentId },
       data: { lastSeenAt: now }
     });
     await this.realtime.emit(
       "agent.presence.updated",
-      presence,
-      membership.conversationId
+      {
+        agentId,
+        conversationId: input.conversationId,
+        status: presence.status,
+        statusMessage: presence.statusMessage,
+        activityTitle: presence.activityTitle
+      },
+      input.conversationId
     );
-
     return { presence };
   }
 
-  async startActivity(input: StartAgentActivityInput) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
+  async startActivity(principal: Principal, input: StartAgentActivityInput) {
+    const agentId = requireActingAgent(principal);
+    const membership = await this.memberships.requireAgentConversationMembership(
+      agentId,
+      input.conversationId
     );
 
     const activity = await this.prisma.agentActivity.create({
       data: {
-        agentId: membership.agentId,
-        conversationId: membership.conversationId,
-        conversationAgentId: membership.id,
+        agentId,
+        conversationId: input.conversationId,
+        membershipId: membership.id,
         title: input.title,
         status: "working",
         metadata: (input.metadata ?? {}) as Prisma.InputJsonValue
       }
     });
 
-    await this.setPresence({
-      conversationAgentId: membership.id,
-      status: "working",
-      activityTitle: input.title
-    });
+    await this.writePresence(
+      membership.id,
+      agentId,
+      { conversationId: input.conversationId, status: "working" },
+      input.title
+    );
     await this.realtime.emit(
       "agent.activity.started",
-      activity,
-      membership.conversationId
+      { id: activity.id, agentId, conversationId: input.conversationId, title: activity.title },
+      input.conversationId
     );
-
     return { activity };
   }
 
-  async finishActivity(input: FinishAgentActivityInput) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
+  async finishActivity(principal: Principal, input: FinishAgentActivityInput) {
+    const agentId = requireActingAgent(principal);
+    const membership = await this.memberships.requireAgentConversationMembership(
+      agentId,
+      input.conversationId
     );
+
     const activity = input.activityId
-      ? await this.prisma.agentActivity.findUnique({
-          where: { id: input.activityId }
-        })
+      ? await this.prisma.agentActivity.findUnique({ where: { id: input.activityId } })
       : await this.prisma.agentActivity.findFirst({
-          where: {
-            conversationAgentId: membership.id,
-            agentId: membership.agentId,
-            status: "working"
-          },
+          where: { membershipId: membership.id, agentId, status: "working" },
           orderBy: { startedAt: "desc" }
         });
 
     if (!activity) {
       throw notFound("Active agent activity not found");
     }
-
-    if (
-      activity.agentId !== membership.agentId ||
-      activity.conversationAgentId !== membership.id
-    ) {
-      throw forbidden("Activity does not belong to this conversation agent");
+    if (activity.agentId !== agentId) {
+      throw forbidden("Activity does not belong to this agent");
     }
 
     const updated = await this.prisma.agentActivity.update({
@@ -221,48 +233,43 @@ export class AgentEventService {
       }
     });
 
-    await this.setPresence({
-      conversationAgentId: membership.id,
-      status: "available"
-    });
+    await this.writePresence(
+      membership.id,
+      agentId,
+      { conversationId: input.conversationId, status: "available" },
+      null
+    );
     await this.realtime.emit(
       "agent.activity.finished",
-      updated,
-      membership.conversationId
+      { id: updated.id, agentId, conversationId: input.conversationId, status: updated.status },
+      input.conversationId
     );
 
-    const inbox = await this.syncInbox({
-      conversationAgentId: membership.id,
+    const inbox = await this.syncInbox(principal, {
       limit: 25,
       includeAcknowledged: false
     });
-
     return { activity: updated, inbox };
   }
 
-  async syncInbox(input: SyncAgentInboxInput) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
-    );
+  async syncInbox(principal: Principal, input: SyncAgentInboxInput) {
+    const agentId = requireActingAgent(principal);
     const statusFilter = input.includeAcknowledged
       ? undefined
       : { in: ["pending", "delivered"] };
 
     const deliveries = await this.prisma.agentEventDelivery.findMany({
       where: {
-        agentId: membership.agentId,
+        agentId,
         ...(statusFilter ? { status: statusFilter } : {}),
-        event: {
-          ...(input.eventTypes ? { type: { in: input.eventTypes } } : {})
-        }
+        ...(input.eventTypes ? { event: { type: { in: input.eventTypes } } } : {})
       },
       include: {
         event: {
           include: {
-            conversation: true,
-            message: true,
-            targetAgent: true,
-            targetConversationAgent: true
+            conversation: { select: { id: true, title: true, projectId: true } },
+            message: { select: { id: true, sequenceNumber: true } },
+            targetAgent: { select: { id: true, handle: true } }
           }
         }
       },
@@ -270,89 +277,59 @@ export class AgentEventService {
       take: input.limit
     });
 
-    const pendingDeliveryIds = deliveries
+    const pendingIds = deliveries
       .filter((delivery) => delivery.status === "pending")
       .map((delivery) => delivery.id);
     const deliveredAt = new Date();
-
-    if (pendingDeliveryIds.length > 0) {
+    if (pendingIds.length > 0) {
       await this.prisma.agentEventDelivery.updateMany({
-        where: { id: { in: pendingDeliveryIds } },
-        data: {
-          status: "delivered",
-          deliveredAt
-        }
+        where: { id: { in: pendingIds } },
+        data: { status: "delivered", deliveredAt }
       });
     }
 
     const pendingCount = await this.prisma.agentEventDelivery.count({
-      where: {
-        agentId: membership.agentId,
-        status: { in: ["pending", "delivered"] }
-      }
+      where: { agentId, status: { in: ["pending", "delivered"] } }
     });
-
-    await this.touchAgent(membership.agentId);
+    await this.touch(agentId);
 
     return {
       events: deliveries.map((delivery) => ({
         deliveryId: delivery.id,
-        status:
-          delivery.status === "pending" ? "delivered" : delivery.status,
-        deliveredAt:
-          delivery.status === "pending" ? deliveredAt : delivery.deliveredAt,
+        status: delivery.status === "pending" ? "delivered" : delivery.status,
+        deliveredAt: delivery.status === "pending" ? deliveredAt : delivery.deliveredAt,
         acknowledgedAt: delivery.acknowledgedAt,
         event: delivery.event
       })),
       pendingCount,
       recommendedNextAction:
         pendingCount > 0
-          ? "Process these events, then call ack_agent_events with the deliveryIds you handled."
-          : "No pending events. Continue the current task or call wait_for_events only when you are available."
+          ? "Process these events, then call centragent_inbox_ack with the deliveryIds you handled."
+          : "No pending events. Continue the current task; call centragent_inbox_sync after tasks."
     };
   }
 
-  async ackEvents(input: { conversationAgentId: string; deliveryIds: string[] }) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
-    );
-
+  async ackEvents(principal: Principal, deliveryIds: string[]) {
+    const agentId = requireActingAgent(principal);
     const result = await this.prisma.agentEventDelivery.updateMany({
-      where: {
-        id: { in: input.deliveryIds },
-        agentId: membership.agentId
-      },
-      data: {
-        status: "acknowledged",
-        acknowledgedAt: new Date()
-      }
+      where: { id: { in: deliveryIds }, agentId },
+      data: { status: "acknowledged", acknowledgedAt: new Date() }
     });
-
-    await this.touchAgent(membership.agentId);
-    await this.realtime.emit(
-      "agent.event.acknowledged",
-      {
-        conversationAgentId: membership.id,
-        agentId: membership.agentId,
-        deliveryIds: input.deliveryIds,
-        acknowledgedCount: result.count
-      },
-      membership.conversationId
-    );
-
+    await this.touch(agentId);
+    await this.realtime.emit("agent.event.acknowledged", {
+      agentId,
+      deliveryIds,
+      acknowledgedCount: result.count
+    });
     return { acknowledgedCount: result.count };
   }
 
-  async waitForEvents(input: WaitForAgentEventsInput, signal?: AbortSignal) {
-    const membership = await this.requireActiveMembership(
-      input.conversationAgentId
-    );
-    await this.setPresence({
-      conversationAgentId: membership.id,
-      status: "listening",
-      statusMessage: "Waiting for mentions and inbox events"
-    });
-
+  async waitForEvents(
+    principal: Principal,
+    input: WaitForAgentEventsInput,
+    signal?: AbortSignal
+  ) {
+    const agentId = requireActingAgent(principal);
     const deadline = Date.now() + input.timeoutSeconds * 1000;
     const subscriber = this.realtime.makeRedisSubscriber();
     let wake: (() => void) | undefined;
@@ -360,47 +337,29 @@ export class AgentEventService {
 
     try {
       subscriber.on("error", (error) =>
-        this.log.warn({ error, agentId: membership.agentId }, "agent inbox wait redis error")
+        this.log.warn({ error, agentId }, "agent inbox wait redis error")
       );
       await subscriber.connect();
-      await subscriber.subscribe(agentEventsRedisChannel(membership.agentId));
-      subscriber.on("message", () => {
-        wake?.();
-      });
+      await subscriber.subscribe(agentEventsRedisChannel(agentId));
+      subscriber.on("message", () => wake?.());
       redisSubscribed = true;
     } catch (error) {
-      this.log.warn(
-        { error, agentId: membership.agentId },
-        "Redis agent wake unavailable; using polling only"
-      );
+      this.log.warn({ error, agentId }, "Redis agent wake unavailable; polling only");
     }
 
     try {
       while (Date.now() < deadline) {
         if (signal?.aborted) {
-          return {
-            events: [],
-            pendingCount: 0,
-            status: "cancelled",
-            recommendedNextAction:
-              "wait_for_events was cancelled. Call sync_agent_inbox after finishing your current task."
-          };
+          return { events: [], pendingCount: 0, status: "cancelled" };
         }
-
-        const inbox = await this.syncInbox({
-          conversationAgentId: input.conversationAgentId,
+        const inbox = await this.syncInbox(principal, {
           limit: input.limit,
           includeAcknowledged: false,
           ...(input.eventTypes ? { eventTypes: input.eventTypes } : {})
         });
-
         if (inbox.events.length > 0) {
-          return {
-            ...inbox,
-            status: "events_available"
-          };
+          return { ...inbox, status: "events_available" };
         }
-
         const remainingMs = deadline - Date.now();
         await Promise.race([
           sleep(Math.min(remainingMs, 5000)),
@@ -410,43 +369,27 @@ export class AgentEventService {
           })
         ]);
       }
-
       return {
         events: [],
         pendingCount: 0,
         status: "timed_out",
         recommendedNextAction:
-          "No events arrived. Continue useful work, call sync_agent_inbox after tasks, or call wait_for_events again only if idle."
+          "No events arrived. Continue useful work; call centragent_inbox_sync after tasks."
       };
     } finally {
       wake = undefined;
       if (redisSubscribed) {
-        await subscriber.unsubscribe(agentEventsRedisChannel(membership.agentId)).catch(
-          () => undefined
-        );
+        await subscriber
+          .unsubscribe(agentEventsRedisChannel(agentId))
+          .catch(() => undefined);
       }
       await subscriber.quit().catch(() => undefined);
     }
   }
 
-  private async requireActiveMembership(conversationAgentId: string) {
-    const membership = await this.prisma.conversationAgent.findUnique({
-      where: { id: conversationAgentId },
-      include: { agent: true }
-    });
-
-    if (!membership || membership.status !== "active") {
-      throw forbidden("Agent is not an active conversation member");
-    }
-
-    return membership;
-  }
-
-  private async touchAgent(agentId: string) {
-    const now = new Date();
-    await this.prisma.agent.update({
-      where: { id: agentId },
-      data: { lastSeenAt: now }
-    });
+  private async touch(agentId: string) {
+    await this.prisma.agent
+      .update({ where: { id: agentId }, data: { lastSeenAt: new Date() } })
+      .catch(() => undefined);
   }
 }

@@ -1,22 +1,31 @@
 export type RealtimeEventName =
+  | "connected"
+  | "error"
+  | "project.created"
+  | "project.updated"
   | "conversation.created"
   | "conversation.updated"
   | "message.created"
+  | "document.updated"
+  | "membership.created"
+  | "membership.updated"
   | "agent.join_request.created"
   | "agent.join_request.accepted"
   | "agent.join_request.rejected"
   | "agent.joined"
-  | "agent.removed"
+  | "agent.left"
   | "agent.presence.updated"
   | "agent.activity.started"
   | "agent.activity.finished"
   | "agent.event.created"
   | "agent.event.acknowledged"
-  | "semantic_memory.created";
+  | "memory.indexed";
 
 export type RealtimeEnvelope<TPayload = unknown> = {
   event: RealtimeEventName;
   payload: TPayload;
+  // Scope hints used for server-side fanout filtering.
+  projectId?: string | null;
   conversationId?: string | null;
   createdAt: string;
 };

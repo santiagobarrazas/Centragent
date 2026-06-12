@@ -50,7 +50,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: sh -lc "corepack pnpm db:deploy && corepack pnpm db:seed"
+    command: sh -lc "corepack pnpm db:setup"
 
   api:
     image: centragent-dev:local

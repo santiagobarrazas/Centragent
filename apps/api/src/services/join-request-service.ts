@@ -1,8 +1,12 @@
 import type { FastifyBaseLogger } from "fastify";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { joinRequestRedisChannel, type RequestJoinConversationInput } from "@centragent/shared";
-import { badRequest, notFound } from "../errors.js";
-import type { AgentService } from "./agent-service.js";
+import {
+  joinRequestRedisChannel,
+  type RequestJoinConversationInput
+} from "@centragent/shared";
+import type { Principal } from "../auth/principal.js";
+import { badRequest, forbidden, notFound } from "../errors.js";
+import type { MembershipService } from "./membership-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
 type JoinDecisionStatus = "accepted" | "rejected" | "timed_out" | "cancelled";
@@ -11,7 +15,7 @@ type JoinDecision = {
   status: JoinDecisionStatus;
   conversationId: string;
   agentId: string;
-  conversationAgentId: string | null;
+  membershipId: string | null;
   message: string;
 };
 
@@ -20,174 +24,167 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export class JoinRequestService {
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly agents: AgentService,
+    private readonly memberships: MembershipService,
     private readonly realtime: RealtimeService,
     private readonly log: FastifyBaseLogger
   ) {}
 
-  async list(status?: string) {
+  async list(principal: Principal, status = "pending") {
+    // Only requests the principal can act on: pending requests in conversations
+    // whose project the principal administers.
+    const where: Prisma.JoinRequestWhereInput = {
+      status,
+      ...(status === "pending" ? { expiresAt: { gt: new Date() } } : {}),
+      conversation: {
+        project: {
+          memberships: {
+            some: {
+              userId: principal.userId,
+              conversationId: null,
+              status: "active",
+              role: { in: ["owner", "admin"] }
+            }
+          }
+        }
+      }
+    };
+
     const joinRequests = await this.prisma.joinRequest.findMany({
-      where: {
-        ...(status ? { status } : {}),
-        ...(status === "pending" ? { expiresAt: { gt: new Date() } } : {})
-      },
+      where,
       include: {
-        agent: true,
-        conversation: true
+        agent: { select: { id: true, name: true, handle: true, provider: true, ownerId: true } },
+        conversation: { select: { id: true, title: true, projectId: true } }
       },
       orderBy: { createdAt: "desc" }
     });
-
     return { joinRequests };
   }
 
   async createAndWait(
+    principal: Principal,
     input: RequestJoinConversationInput,
     signal?: AbortSignal
   ): Promise<JoinDecision> {
+    if (!principal.agentId) {
+      throw forbidden("Joining a conversation requires an agent token");
+    }
     const conversation = await this.prisma.conversation.findUnique({
-      where: { id: input.conversationId }
+      where: { id: input.conversationId },
+      select: { id: true, projectId: true }
     });
-
     if (!conversation) {
       throw notFound("Conversation not found");
     }
 
-    const agent = await this.agents.findOrCreateAgent({
-      name: input.agentName,
-      ...(input.agentHandle ? { agentHandle: input.agentHandle } : {}),
-      provider: input.provider,
-      ...(input.clientInstanceId
-        ? { clientInstanceId: input.clientInstanceId }
-        : {})
+    // Already a member? Short-circuit so re-runs are idempotent.
+    const existing = await this.prisma.membership.findFirst({
+      where: {
+        agentId: principal.agentId,
+        conversationId: input.conversationId,
+        principalType: "agent",
+        status: "active"
+      }
     });
+    if (existing) {
+      return {
+        status: "accepted",
+        conversationId: input.conversationId,
+        agentId: principal.agentId,
+        membershipId: existing.id,
+        message: "The agent is already a member of this conversation."
+      };
+    }
 
-    const expiresAt = new Date(Date.now() + input.timeoutSeconds * 1000);
     const joinRequest = await this.prisma.joinRequest.create({
       data: {
         conversationId: input.conversationId,
-        agentId: agent.id,
+        agentId: principal.agentId,
         requestedRole: input.requestedRole,
         status: "pending",
         reason: input.reason ?? null,
-        expiresAt,
+        expiresAt: new Date(Date.now() + input.timeoutSeconds * 1000),
         metadata: (input.metadata ?? {}) as Prisma.InputJsonValue
       },
       include: {
-        agent: true,
-        conversation: true
+        agent: { select: { id: true, name: true, handle: true, provider: true } },
+        conversation: { select: { id: true, title: true, projectId: true } }
       }
     });
 
-    await this.realtime.emit(
-      "agent.join_request.created",
-      joinRequest,
-      input.conversationId
-    );
-
+    // Global nudge (no conversation scope) so project admins see the pending
+    // request without being subscribed to the conversation; the actual list is
+    // membership-scoped via REST.
+    await this.realtime.emit("agent.join_request.created", joinRequest);
     return this.waitForDecision(joinRequest.id, signal);
   }
 
-  async accept(joinRequestId: string) {
-    const result = await this.prisma.$transaction(async (tx) => {
-      const request = await tx.joinRequest.findUnique({
-        where: { id: joinRequestId },
-        include: { agent: true, conversation: true }
-      });
-
-      if (!request) {
-        throw notFound("Join request not found");
-      }
-
-      if (request.status !== "pending") {
-        throw badRequest(`Join request is already ${request.status}`);
-      }
-
-      const updatedRequest = await tx.joinRequest.update({
-        where: { id: joinRequestId },
-        data: {
-          status: "accepted",
-          respondedAt: new Date()
-        },
-        include: { agent: true, conversation: true }
-      });
-
-      const membership = await tx.conversationAgent.upsert({
-        where: {
-          conversationId_agentId: {
-            conversationId: request.conversationId,
-            agentId: request.agentId
-          }
-        },
-        update: {
-          role: request.requestedRole,
-          status: "active",
-          joinedAt: new Date(),
-          leftAt: null
-        },
-        create: {
-          conversationId: request.conversationId,
-          agentId: request.agentId,
-          role: request.requestedRole,
-          status: "active",
-          joinedAt: new Date(),
-          metadata: {}
-        }
-      });
-
-      return { request: updatedRequest, membership };
-    });
-
-    await this.realtime.emit(
-      "agent.join_request.accepted",
-      result.request,
-      result.request.conversationId
-    );
-    await this.realtime.emit(
-      "agent.joined",
-      result.membership,
-      result.request.conversationId
-    );
-    await this.realtime.publishJoinDecision(joinRequestId, {
-      status: "accepted"
-    });
-
-    return result;
-  }
-
-  async reject(joinRequestId: string, reason?: string) {
+  async accept(principal: Principal, joinRequestId: string) {
     const request = await this.prisma.joinRequest.findUnique({
       where: { id: joinRequestId },
-      include: { agent: true, conversation: true }
+      include: { conversation: { select: { projectId: true } } }
     });
-
     if (!request) {
       throw notFound("Join request not found");
     }
-
+    await this.memberships.requireProjectRole(
+      principal,
+      request.conversation.projectId,
+      "admin"
+    );
     if (request.status !== "pending") {
       throw badRequest(`Join request is already ${request.status}`);
     }
 
     const updated = await this.prisma.joinRequest.update({
       where: { id: joinRequestId },
-      data: {
-        status: "rejected",
-        reason: reason ?? request.reason,
-        respondedAt: new Date()
-      },
-      include: { agent: true, conversation: true }
+      data: { status: "accepted", respondedAt: new Date() },
+      include: {
+        agent: { select: { id: true, name: true, handle: true, provider: true } },
+        conversation: { select: { id: true, title: true, projectId: true } }
+      }
     });
 
-    await this.realtime.emit(
-      "agent.join_request.rejected",
-      updated,
-      updated.conversationId
+    const membership = await this.memberships.upsertAgentConversationMembership({
+      agentId: request.agentId,
+      projectId: request.conversation.projectId,
+      conversationId: request.conversationId,
+      participantRole: request.requestedRole
+    });
+
+    await this.realtime.emit("agent.join_request.accepted", updated, request.conversationId);
+    await this.realtime.emit("agent.joined", { membership, conversationId: request.conversationId }, request.conversationId);
+    await this.realtime.publishJoinDecision(joinRequestId, { status: "accepted" });
+    return { request: updated, membership };
+  }
+
+  async reject(principal: Principal, joinRequestId: string, reason?: string) {
+    const request = await this.prisma.joinRequest.findUnique({
+      where: { id: joinRequestId },
+      include: { conversation: { select: { projectId: true } } }
+    });
+    if (!request) {
+      throw notFound("Join request not found");
+    }
+    await this.memberships.requireProjectRole(
+      principal,
+      request.conversation.projectId,
+      "admin"
     );
-    await this.realtime.publishJoinDecision(joinRequestId, {
-      status: "rejected"
+    if (request.status !== "pending") {
+      throw badRequest(`Join request is already ${request.status}`);
+    }
+
+    const updated = await this.prisma.joinRequest.update({
+      where: { id: joinRequestId },
+      data: { status: "rejected", reason: reason ?? request.reason, respondedAt: new Date() },
+      include: {
+        agent: { select: { id: true, name: true, handle: true, provider: true } },
+        conversation: { select: { id: true, title: true, projectId: true } }
+      }
     });
 
+    await this.realtime.emit("agent.join_request.rejected", updated, request.conversationId);
+    await this.realtime.publishJoinDecision(joinRequestId, { status: "rejected" });
     return updated;
   }
 
@@ -205,15 +202,10 @@ export class JoinRequestService {
       );
       await subscriber.connect();
       await subscriber.subscribe(joinRequestRedisChannel(joinRequestId));
-      subscriber.on("message", () => {
-        wake?.();
-      });
+      subscriber.on("message", () => wake?.());
       redisSubscribed = true;
     } catch (error) {
-      this.log.warn(
-        { error, joinRequestId },
-        "Redis join wake unavailable; using polling only"
-      );
+      this.log.warn({ error, joinRequestId }, "Redis join wake unavailable; polling only");
     }
 
     try {
@@ -221,24 +213,19 @@ export class JoinRequestService {
         if (signal?.aborted) {
           return this.cancel(joinRequestId);
         }
-
         const request = await this.prisma.joinRequest.findUnique({
           where: { id: joinRequestId }
         });
-
         if (!request) {
           throw notFound("Join request not found");
         }
-
         if (request.status !== "pending") {
-          return this.formatDecision(request.id);
+          return this.formatDecision(joinRequestId);
         }
-
         const remainingMs = request.expiresAt.getTime() - Date.now();
         if (remainingMs <= 0) {
           return this.markTimedOut(joinRequestId);
         }
-
         await Promise.race([
           sleep(Math.min(remainingMs, 2000)),
           new Promise<void>((resolve) => {
@@ -250,9 +237,9 @@ export class JoinRequestService {
     } finally {
       wake = undefined;
       if (redisSubscribed) {
-        await subscriber.unsubscribe(joinRequestRedisChannel(joinRequestId)).catch(
-          () => undefined
-        );
+        await subscriber
+          .unsubscribe(joinRequestRedisChannel(joinRequestId))
+          .catch(() => undefined);
       }
       await subscriber.quit().catch(() => undefined);
     }
@@ -260,97 +247,56 @@ export class JoinRequestService {
 
   private async formatDecision(joinRequestId: string): Promise<JoinDecision> {
     const request = await this.prisma.joinRequest.findUnique({
-      where: { id: joinRequestId },
-      include: { agent: true, conversation: true }
+      where: { id: joinRequestId }
     });
-
     if (!request) {
       throw notFound("Join request not found");
     }
-
     const membership =
       request.status === "accepted"
-        ? await this.prisma.conversationAgent.findFirst({
+        ? await this.prisma.membership.findFirst({
             where: {
               conversationId: request.conversationId,
               agentId: request.agentId,
+              principalType: "agent",
               status: "active"
             }
           })
         : null;
 
     const status = request.status as JoinDecisionStatus;
-
     return {
       status,
       conversationId: request.conversationId,
       agentId: request.agentId,
-      conversationAgentId: membership?.id ?? null,
+      membershipId: membership?.id ?? null,
       message: this.messageForStatus(status, request.reason ?? undefined)
     };
   }
 
   private async markTimedOut(joinRequestId: string): Promise<JoinDecision> {
-    const existing = await this.prisma.joinRequest.findUnique({
-      where: { id: joinRequestId }
-    });
-
-    if (!existing) {
-      throw notFound("Join request not found");
-    }
-
-    if (existing.status === "pending") {
+    const existing = await this.prisma.joinRequest.findUnique({ where: { id: joinRequestId } });
+    if (existing?.status === "pending") {
       const updated = await this.prisma.joinRequest.update({
         where: { id: joinRequestId },
-        data: {
-          status: "timed_out",
-          respondedAt: new Date()
-        },
-        include: { agent: true, conversation: true }
+        data: { status: "timed_out", respondedAt: new Date() }
       });
-
-      await this.realtime.emit(
-        "agent.join_request.rejected",
-        updated,
-        updated.conversationId
-      );
-      await this.realtime.publishJoinDecision(joinRequestId, {
-        status: "timed_out"
-      });
+      await this.realtime.emit("agent.join_request.rejected", updated, updated.conversationId);
+      await this.realtime.publishJoinDecision(joinRequestId, { status: "timed_out" });
     }
-
     return this.formatDecision(joinRequestId);
   }
 
   private async cancel(joinRequestId: string): Promise<JoinDecision> {
-    const existing = await this.prisma.joinRequest.findUnique({
-      where: { id: joinRequestId }
-    });
-
-    if (!existing) {
-      throw notFound("Join request not found");
-    }
-
-    if (existing.status === "pending") {
+    const existing = await this.prisma.joinRequest.findUnique({ where: { id: joinRequestId } });
+    if (existing?.status === "pending") {
       const updated = await this.prisma.joinRequest.update({
         where: { id: joinRequestId },
-        data: {
-          status: "cancelled",
-          respondedAt: new Date()
-        },
-        include: { agent: true, conversation: true }
+        data: { status: "cancelled", respondedAt: new Date() }
       });
-
-      await this.realtime.emit(
-        "agent.join_request.rejected",
-        updated,
-        updated.conversationId
-      );
-      await this.realtime.publishJoinDecision(joinRequestId, {
-        status: "cancelled"
-      });
+      await this.realtime.emit("agent.join_request.rejected", updated, updated.conversationId);
+      await this.realtime.publishJoinDecision(joinRequestId, { status: "cancelled" });
     }
-
     return this.formatDecision(joinRequestId);
   }
 
@@ -358,17 +304,12 @@ export class JoinRequestService {
     if (status === "accepted") {
       return "Join request accepted. The agent may now participate in the conversation.";
     }
-
     if (status === "rejected") {
-      return reason
-        ? `Join request rejected: ${reason}`
-        : "Join request rejected.";
+      return reason ? `Join request rejected: ${reason}` : "Join request rejected.";
     }
-
     if (status === "timed_out") {
-      return "Join request timed out before the master user responded.";
+      return "Join request timed out before a project admin responded.";
     }
-
     return "Join request was cancelled by the MCP client.";
   }
 }

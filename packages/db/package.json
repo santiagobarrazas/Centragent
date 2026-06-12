@@ -7,9 +7,11 @@
   "types": "./src/index.ts",
   "scripts": {
     "db:generate": "prisma generate --schema prisma/schema.prisma",
-    "db:migrate": "prisma migrate dev --schema prisma/schema.prisma",
-    "db:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "db:push": "prisma db push --schema prisma/schema.prisma --accept-data-loss",
+    "db:constraints": "prisma db execute --file prisma/sql/constraints.sql --schema prisma/schema.prisma",
     "db:seed": "tsx src/seed.ts",
+    "db:setup": "prisma db push --schema prisma/schema.prisma --accept-data-loss && prisma db execute --file prisma/sql/constraints.sql --schema prisma/schema.prisma && tsx src/seed.ts",
+    "db:studio": "prisma studio --schema prisma/schema.prisma",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },

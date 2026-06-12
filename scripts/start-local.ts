@@ -30,7 +30,14 @@ type Choice<TValue> = {
   value: TValue;
 };
 
-type McpToolTarget = "claude-code" | "codex" | "antigravity-cli";
+type McpToolTarget =
+  | "claude-code"
+  | "codex"
+  | "kimi-cli"
+  | "cursor"
+  | "antigravity-ide"
+  | "antigravity-cli"
+  | "opencode";
 
 type McpInstallResult = {
   target: McpToolTarget;
@@ -39,6 +46,28 @@ type McpInstallResult = {
   ok: boolean;
   message: string;
 };
+
+const PROVIDER_FOR_TARGET: Record<McpToolTarget, string> = {
+  "claude-code": "claude_code",
+  codex: "codex",
+  "kimi-cli": "kimi_cli",
+  cursor: "cursor",
+  "antigravity-ide": "antigravity",
+  "antigravity-cli": "antigravity_cli",
+  opencode: "opencode"
+};
+
+const TOOL_LABELS: Record<McpToolTarget, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "kimi-cli": "Kimi CLI",
+  cursor: "Cursor",
+  "antigravity-ide": "Antigravity IDE",
+  "antigravity-cli": "Antigravity CLI",
+  opencode: "OpenCode"
+};
+
+const installStatePath = path.join(rootDir, ".centragent", "install.json");
 
 const isWindows = process.platform === "win32";
 const quickStart = process.argv.includes("--yes") || process.argv.includes("--no-interactive");
@@ -55,6 +84,9 @@ async function main() {
   }
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let mcpTargets: McpToolTarget[] = [];
+  let shouldStart = true;
+  let mergedEnv: EnvMap = env;
 
   try {
     printHeader();
@@ -98,27 +130,26 @@ async function main() {
 
     printSelection(provider, updates);
 
-    const mcpTargets = await chooseMcpTargets(rl);
-    const shouldStart = await confirm(
-      rl,
-      "Start the full Docker Compose stack now?",
-      true
-    );
+    mcpTargets = await chooseMcpTargets(rl);
+    shouldStart = await confirm(rl, "Start the full Docker Compose stack now?", true);
 
     await writeEnvFile(updates);
     console.log(`\nUpdated ${path.relative(rootDir, envPath)}.`);
-
-    await installMcpTargets(mcpTargets, { ...env, ...updates });
-
-    if (!shouldStart) {
-      console.log("Configuration saved. Start later with pnpm start:local.");
-      return;
-    }
+    mergedEnv = { ...env, ...updates };
   } finally {
     rl.close();
   }
 
+  if (!shouldStart) {
+    console.log(
+      "Configuration saved. Start later with pnpm start:local (it also connects your agent tools)."
+    );
+    return;
+  }
+
+  // The stack must be up before we can mint per-tool agent tokens via the API.
   await runSetupCommands();
+  await installMcpTargets(mcpTargets, mergedEnv);
   printDockerStarted();
 }
 
@@ -220,29 +251,34 @@ function printQuickStart(env: EnvMap) {
 
 async function chooseMcpTargets(rl: ReturnType<typeof createInterface>) {
   const choices: Array<Choice<McpToolTarget>> = [
+    { label: "Claude Code", description: "~/.claude.json (user scope)", value: "claude-code" },
+    { label: "Codex", description: "~/.codex/config.toml", value: "codex" },
+    { label: "Kimi CLI", description: "~/.kimi/mcp.json", value: "kimi-cli" },
+    { label: "Cursor", description: "~/.cursor/mcp.json", value: "cursor" },
     {
-      label: "Claude Code",
-      description: "writes Centragent to ~/.claude.json for this project",
-      value: "claude-code"
-    },
-    {
-      label: "Codex",
-      description: "writes Centragent to ~/.codex/config.toml",
-      value: "codex"
+      label: "Antigravity IDE",
+      description: "~/.gemini/antigravity/mcp_config.json",
+      value: "antigravity-ide"
     },
     {
       label: "Antigravity CLI",
-      description: "writes Centragent to ~/.gemini/antigravity-cli/mcp_config.json",
+      description: "~/.gemini/antigravity-cli/ + unified ~/.gemini/config/",
       value: "antigravity-cli"
+    },
+    {
+      label: "OpenCode",
+      description: "~/.config/opencode/opencode.json",
+      value: "opencode"
     }
   ];
 
-  return chooseMultiple(
-    rl,
-    "Install Centragent MCP into agent tools",
-    choices,
-    choices.map((choice) => choice.value)
-  );
+  // Default to the tools most commonly used; all 7 are supported.
+  return chooseMultiple(rl, "Install Centragent MCP into agent tools", choices, [
+    "claude-code",
+    "codex",
+    "cursor",
+    "antigravity-cli"
+  ]);
 }
 
 async function chooseProvider(
@@ -463,109 +499,129 @@ async function chooseMultiple<TValue extends string>(
   }
 }
 
+type InstallEntry = { agentId: string; token: string; prefix: string };
+type InstallState = Partial<Record<McpToolTarget, InstallEntry>>;
+
 async function installMcpTargets(targets: McpToolTarget[], env: EnvMap) {
   if (targets.length === 0) {
     console.log("Skipped MCP client installation.");
     return;
   }
 
+  const apiUrl = hostApiUrl(env);
   const mcpUrl = localMcpUrl(env);
-  console.log(`\nInstalling ${mcpServerName} MCP server at ${mcpUrl}`);
-
-  const results: McpInstallResult[] = [];
-  for (const target of targets) {
-    results.push(await installMcpTarget(target, mcpUrl));
+  console.log(`\nWaiting for the Centragent API at ${apiUrl} ...`);
+  if (!(await waitForApiHealth(apiUrl))) {
+    console.log(
+      "  API did not become healthy in time; skipping token minting. Re-run the launcher or use the web 'Connect a tool' screen."
+    );
+    return;
   }
+
+  console.log(`Installing ${mcpServerName} MCP at ${mcpUrl} (one agent + token per tool)`);
+  const state = await readInstallState();
+  const results: McpInstallResult[] = [];
+
+  for (const target of targets) {
+    try {
+      let entry = state[target];
+      if (!entry?.token) {
+        entry = await mintAgentToken(apiUrl, target);
+        state[target] = entry;
+      }
+      results.push(await installMcpTarget(target, mcpUrl, entry.token));
+    } catch (error) {
+      results.push({
+        target,
+        label: TOOL_LABELS[target],
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+  await writeInstallState(state);
 
   for (const result of results) {
     const marker = result.ok ? "ok" : "failed";
     const location = result.path ? ` (${result.path})` : "";
     console.log(`  [${marker}] ${result.label}${location}: ${result.message}`);
   }
-
-  if (results.some((result) => !result.ok)) {
-    console.log(
-      "Some MCP installs failed. Centragent can still start; fix the listed config and restart that tool."
-    );
-  }
+  console.log(
+    results.some((result) => !result.ok)
+      ? "Some MCP installs failed. Fix the listed config and restart that tool."
+      : "Restart the affected tools so they reload Centragent's MCP config."
+  );
 }
+
+const okResult = (
+  target: McpToolTarget,
+  filePath: string,
+  message: string
+): McpInstallResult => ({ target, label: TOOL_LABELS[target], path: filePath, ok: true, message });
 
 async function installMcpTarget(
   target: McpToolTarget,
-  mcpUrl: string
+  mcpUrl: string,
+  token: string
 ): Promise<McpInstallResult> {
-  try {
-    if (target === "claude-code") {
-      const filePath = path.join(os.homedir(), ".claude.json");
-      await installClaudeCodeMcp(filePath, mcpUrl);
-      return {
-        target,
-        label: "Claude Code",
-        path: filePath,
-        ok: true,
-        message: "configured for this workspace"
-      };
-    }
-
-    if (target === "codex") {
-      const filePath = path.join(os.homedir(), ".codex", "config.toml");
-      await installCodexMcp(filePath, mcpUrl);
-      return {
-        target,
-        label: "Codex",
-        path: filePath,
-        ok: true,
-        message: "configured"
-      };
-    }
-
-    const filePath = path.join(
-      os.homedir(),
-      ".gemini",
-      "antigravity-cli",
-      "mcp_config.json"
-    );
-    await installAntigravityCliMcp(filePath, mcpUrl);
-    return {
-      target,
-      label: "Antigravity CLI",
-      path: filePath,
-      ok: true,
-      message: "configured with serverUrl"
-    };
-  } catch (error) {
-    return {
-      target,
-      label: labelForMcpTarget(target),
-      ok: false,
-      message: error instanceof Error ? error.message : String(error)
-    };
+  if (target === "claude-code") {
+    const filePath = path.join(os.homedir(), ".claude.json");
+    await installClaudeCodeMcp(filePath, mcpUrl, token);
+    return okResult(target, filePath, "user scope, token attached");
   }
+  if (target === "codex") {
+    const filePath = path.join(os.homedir(), ".codex", "config.toml");
+    await installCodexMcp(filePath, mcpUrl, token);
+    return okResult(target, filePath, "configured (http_headers)");
+  }
+  if (target === "kimi-cli") {
+    const filePath = path.join(os.homedir(), ".kimi", "mcp.json");
+    await installMcpServersJson(filePath, mcpUrl, token, "url");
+    return okResult(target, filePath, "configured");
+  }
+  if (target === "cursor") {
+    const filePath = path.join(os.homedir(), ".cursor", "mcp.json");
+    await installMcpServersJson(filePath, mcpUrl, token, "url");
+    return okResult(target, filePath, "configured");
+  }
+  if (target === "antigravity-ide") {
+    const filePath = path.join(os.homedir(), ".gemini", "antigravity", "mcp_config.json");
+    await installMcpServersJson(filePath, mcpUrl, token, "serverUrl");
+    return okResult(target, filePath, "configured (serverUrl)");
+  }
+  if (target === "antigravity-cli") {
+    const cli = path.join(os.homedir(), ".gemini", "antigravity-cli", "mcp_config.json");
+    const unified = path.join(os.homedir(), ".gemini", "config", "mcp_config.json");
+    await installMcpServersJson(cli, mcpUrl, token, "serverUrl");
+    await installMcpServersJson(unified, mcpUrl, token, "serverUrl");
+    return okResult(target, cli, "configured CLI + unified path (serverUrl)");
+  }
+  const filePath = path.join(os.homedir(), ".config", "opencode", "opencode.json");
+  await installOpencodeMcp(filePath, mcpUrl, token);
+  return okResult(target, filePath, "configured (mcp/type:remote)");
 }
 
-async function installClaudeCodeMcp(filePath: string, mcpUrl: string) {
+async function installClaudeCodeMcp(filePath: string, mcpUrl: string, token: string) {
   const config = await readJsonObject(filePath, {});
-  const root = config as {
-    projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
-  };
-
-  root.projects ??= {};
-  root.projects[rootDir] ??= {};
-  root.projects[rootDir].mcpServers ??= {};
-  root.projects[rootDir].mcpServers[mcpServerName] = {
+  const root = config as { mcpServers?: Record<string, unknown> };
+  // User scope so Centragent is available in every directory.
+  root.mcpServers ??= {};
+  root.mcpServers[mcpServerName] = {
     type: "http",
-    url: mcpUrl
+    url: mcpUrl,
+    headers: { Authorization: `Bearer ${token}` }
   };
-
   await writeJsonWithBackup(filePath, root);
 }
 
-async function installCodexMcp(filePath: string, mcpUrl: string) {
+async function installCodexMcp(filePath: string, mcpUrl: string, token: string) {
   const existing = await fs.readFile(filePath, "utf8").catch(() => "");
+  // The 2026 Codex schema marks HTTP by `url` alone (no `transport`); static
+  // Authorization rides in http_headers.
   const block = [
     `[mcp_servers.${mcpServerName}]`,
-    `transport = "http"`,
     `url = ${quoteEnvValue(mcpUrl)}`,
+    `http_headers = { Authorization = ${quoteEnvValue(`Bearer ${token}`)} }`,
     ""
   ].join("\n");
   const withoutExisting = existing.replace(
@@ -576,20 +632,105 @@ async function installCodexMcp(filePath: string, mcpUrl: string) {
     "$1"
   );
   const next = `${withoutExisting.trimEnd()}\n\n${block}`.trimStart();
-
   await writeTextWithBackup(filePath, next.endsWith("\n") ? next : `${next}\n`);
 }
 
-async function installAntigravityCliMcp(filePath: string, mcpUrl: string) {
+// Generic { mcpServers: { centragent: { <urlKey>, headers } } } writer.
+// urlKey is `url` (Kimi, Cursor) or `serverUrl` (Antigravity).
+async function installMcpServersJson(
+  filePath: string,
+  mcpUrl: string,
+  token: string,
+  urlKey: "url" | "serverUrl"
+) {
   const config = await readJsonObject(filePath, {});
   const root = config as { mcpServers?: Record<string, unknown> };
-
   root.mcpServers ??= {};
   root.mcpServers[mcpServerName] = {
-    serverUrl: mcpUrl
+    [urlKey]: mcpUrl,
+    headers: { Authorization: `Bearer ${token}` }
   };
-
   await writeJsonWithBackup(filePath, root);
+}
+
+async function installOpencodeMcp(filePath: string, mcpUrl: string, token: string) {
+  const config = await readJsonObject(filePath, {});
+  const root = config as { $schema?: string; mcp?: Record<string, unknown> };
+  root.$schema ??= "https://opencode.ai/config.json";
+  root.mcp ??= {};
+  // OpenCode uses top-level `mcp`, `type:"remote"`, and `headers`.
+  root.mcp[mcpServerName] = {
+    type: "remote",
+    url: mcpUrl,
+    enabled: true,
+    headers: { Authorization: `Bearer ${token}` }
+  };
+  await writeJsonWithBackup(filePath, root);
+}
+
+function hostApiUrl(env: EnvMap) {
+  if (env.NEXT_PUBLIC_API_URL) {
+    return env.NEXT_PUBLIC_API_URL;
+  }
+  const host = env.API_HOST && env.API_HOST !== "0.0.0.0" ? env.API_HOST : "127.0.0.1";
+  const port = env.API_PORT || "4000";
+  return `http://${host}:${port}`;
+}
+
+async function waitForApiHealth(apiUrl: string, timeoutMs = 90_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`${apiUrl}/health`);
+      if (response.ok) {
+        return true;
+      }
+    } catch {
+      // not up yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  return false;
+}
+
+async function readInstallState(): Promise<InstallState> {
+  try {
+    return JSON.parse(await fs.readFile(installStatePath, "utf8")) as InstallState;
+  } catch {
+    return {};
+  }
+}
+
+async function writeInstallState(state: InstallState) {
+  await fs.mkdir(path.dirname(installStatePath), { recursive: true });
+  await fs.writeFile(installStatePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+async function mintAgentToken(apiUrl: string, target: McpToolTarget): Promise<InstallEntry> {
+  const agent = (await postJson(`${apiUrl}/agents`, {
+    name: TOOL_LABELS[target],
+    provider: PROVIDER_FOR_TARGET[target]
+  })) as { agent: { id: string } };
+  const minted = (await postJson(`${apiUrl}/tokens`, {
+    kind: "agent",
+    agentId: agent.agent.id,
+    label: `${TOOL_LABELS[target]} @ ${rootDir}`
+  })) as { token: string; tokenInfo: { prefix: string } };
+  return { agentId: agent.agent.id, token: minted.token, prefix: minted.tokenInfo.prefix };
+}
+
+async function postJson(url: string, body: unknown) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const json = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok) {
+    const err = (json as { error?: { message?: string } } | null)?.error;
+    throw new Error(err?.message ?? `HTTP ${response.status}`);
+  }
+  return json;
 }
 
 async function readJsonObject(filePath: string, fallback: Record<string, unknown>) {
@@ -638,18 +779,6 @@ function localMcpUrl(env: EnvMap) {
   const host = env.MCP_HOST || "127.0.0.1";
   const port = env.MCP_PORT || "3001";
   return `http://${host}:${port}/mcp`;
-}
-
-function labelForMcpTarget(target: McpToolTarget) {
-  if (target === "claude-code") {
-    return "Claude Code";
-  }
-
-  if (target === "codex") {
-    return "Codex";
-  }
-
-  return "Antigravity CLI";
 }
 
 function escapeRegExp(value: string) {

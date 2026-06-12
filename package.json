@@ -16,9 +16,10 @@
     "mcp:stdio": "corepack pnpm --filter @centragent/mcp stdio",
     "web:dev": "corepack pnpm --filter @centragent/web dev",
     "db:generate": "corepack pnpm --filter @centragent/db db:generate",
-    "db:migrate": "corepack pnpm --filter @centragent/db db:migrate",
-    "db:deploy": "corepack pnpm --filter @centragent/db db:deploy",
+    "db:push": "corepack pnpm --filter @centragent/db db:push",
+    "db:setup": "corepack pnpm --filter @centragent/db db:setup",
     "db:seed": "corepack pnpm --filter @centragent/db db:seed",
+    "test": "corepack pnpm --filter @centragent/api test",
     "typecheck": "corepack pnpm -r typecheck && tsc --noEmit -p tsconfig.scripts.json",
     "lint": "corepack pnpm -r lint"
   },

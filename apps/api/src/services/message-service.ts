@@ -1,80 +1,133 @@
 import type { FastifyBaseLogger } from "fastify";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import {
   decodeSequenceCursor,
-  encodeSequenceCursor,
-  type SendAgentMessageInput
+  encodeSequenceCursor
 } from "@centragent/shared";
-import type { AppConfig } from "../config.js";
-import { forbidden, notFound } from "../errors.js";
+import type { Principal } from "../auth/principal.js";
+import { actorType } from "../auth/principal.js";
 import type { AgentEventService } from "./agent-event-service.js";
+import type { MembershipService } from "./membership-service.js";
 import type { QdrantMemoryService } from "./qdrant-memory-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
-type CreateMessageInput = {
-  conversationId: string;
-  senderType: "user" | "agent" | "system" | "tool";
-  senderId?: string | null;
-  conversationAgentId?: string | null;
-  role: "user" | "assistant" | "system" | "tool";
-  content: string;
-  metadata?: Record<string, unknown> | undefined;
-};
+const messageInclude = {
+  senderUser: { select: { id: true, name: true, avatarColor: true } },
+  senderAgent: { select: { id: true, name: true, handle: true, provider: true } }
+} satisfies Prisma.MessageInclude;
+
+type MessageRow = Prisma.MessageGetPayload<{ include: typeof messageInclude }>;
 
 export class MessageService {
   constructor(
     private readonly prisma: PrismaClient,
+    private readonly memberships: MembershipService,
     private readonly realtime: RealtimeService,
     private readonly qdrantMemory: QdrantMemoryService,
     private readonly agentEvents: AgentEventService,
-    private readonly config: AppConfig,
     private readonly log: FastifyBaseLogger
   ) {}
 
-  async createUserMessage(
+  /** Post a message as the resolved principal (user or impersonated agent). */
+  async post(
+    principal: Principal,
     conversationId: string,
     content: string,
     metadata?: Record<string, unknown>
   ) {
-    // TODO(auth): senderId should come from authenticated master user context.
-    return this.createMessage({
-      conversationId,
-      senderType: "user",
-      senderId: this.config.MASTER_USER_ID,
-      role: "user",
-      content,
-      metadata
-    });
-  }
+    const { projectId, membership } =
+      await this.memberships.resolveParticipantMembership(principal, conversationId);
+    const isAgent = actorType(principal) === "agent";
 
-  async createAgentMessage(input: SendAgentMessageInput) {
-    const membership = await this.requireActiveConversationAgent(
-      input.conversationId,
-      input.conversationAgentId
+    const message = await this.prisma.$transaction(async (tx) => {
+      // Race-free per-conversation sequence allocation.
+      const rows = await tx.$queryRaw<Array<{ message_seq: number }>>(Prisma.sql`
+        UPDATE "conversations"
+        SET "message_seq" = "message_seq" + 1,
+            "last_message_at" = now(),
+            "updated_at" = now()
+        WHERE "id" = ${conversationId}::uuid
+        RETURNING "message_seq"
+      `);
+      const sequenceNumber = rows[0]?.message_seq ?? 1;
+
+      return tx.message.create({
+        data: {
+          conversationId,
+          senderType: isAgent ? "agent" : "user",
+          senderUserId: isAgent ? null : principal.userId,
+          senderAgentId: isAgent ? principal.agentId : null,
+          membershipId: membership.id,
+          role: isAgent ? "assistant" : "user",
+          status: "complete",
+          content,
+          sequenceNumber,
+          metadata: (metadata ?? {}) as Prisma.InputJsonValue
+        },
+        include: messageInclude
+      });
+    });
+
+    if (isAgent && principal.agentId) {
+      void this.prisma.agent
+        .update({ where: { id: principal.agentId }, data: { lastSeenAt: new Date() } })
+        .catch(() => undefined);
+    }
+
+    await this.realtime.emit(
+      "message.created",
+      this.present(message),
+      conversationId
+    );
+    await this.realtime.emit(
+      "conversation.updated",
+      { conversationId, projectId, lastMessageAt: message.createdAt },
+      conversationId
     );
 
-    return this.createMessage({
-      conversationId: input.conversationId,
-      senderType: "agent",
-      senderId: membership.agentId,
-      conversationAgentId: input.conversationAgentId,
-      role: "assistant",
-      content: input.content,
-      metadata: input.metadata
-    });
+    try {
+      await this.qdrantMemory.indexMessage(message, projectId);
+    } catch (error) {
+      this.log.warn({ error, messageId: message.id }, "Qdrant indexing failed");
+    }
+    try {
+      await this.agentEvents.createMentionsForMessage({
+        id: message.id,
+        conversationId,
+        senderType: message.senderType,
+        senderAgentId: message.senderAgentId,
+        senderUserId: message.senderUserId,
+        content
+      });
+    } catch (error) {
+      this.log.warn(
+        { error, messageId: message.id },
+        "Agent mention event creation failed"
+      );
+    }
+
+    return this.present(message);
   }
 
-  async listMessages(input: {
-    conversationId: string;
-    limit: number;
-    cursor?: string | undefined;
-    direction: "before" | "after";
-  }) {
-    const cursorSequence = decodeSequenceCursor(input.cursor);
+  async list(
+    principal: Principal,
+    conversationId: string,
+    options: { limit: number; cursor?: string | undefined; direction: "before" | "after" }
+  ) {
+    await this.memberships.resolveReadMembership(principal, conversationId);
+    return this.listRaw(conversationId, options);
+  }
+
+  /** Pagination without an auth check (callers must authorize first). */
+  async listRaw(
+    conversationId: string,
+    options: { limit: number; cursor?: string | undefined; direction: "before" | "after" }
+  ) {
+    const cursorSequence = decodeSequenceCursor(options.cursor);
     const where: Prisma.MessageWhereInput = {
-      conversationId: input.conversationId,
+      conversationId,
       ...(cursorSequence !== undefined
-        ? input.direction === "before"
+        ? options.direction === "before"
           ? { sequenceNumber: { lt: cursorSequence } }
           : { sequenceNumber: { gt: cursorSequence } }
         : {})
@@ -82,168 +135,58 @@ export class MessageService {
 
     const rows = await this.prisma.message.findMany({
       where,
-      include: {
-        conversationAgent: {
-          include: {
-            agent: true
-          }
-        }
-      },
+      include: messageInclude,
       orderBy:
-        input.direction === "before"
+        options.direction === "before"
           ? [{ sequenceNumber: "desc" }]
           : [{ sequenceNumber: "asc" }],
-      take: input.limit + 1
+      take: options.limit + 1
     });
 
-    const page = rows.slice(0, input.limit);
-    const messages =
-      input.direction === "before" ? page.reverse() : page;
+    const page = rows.slice(0, options.limit);
+    const messages = options.direction === "before" ? page.reverse() : page;
     const boundary =
-      rows.length > input.limit
-        ? input.direction === "before"
+      rows.length > options.limit
+        ? options.direction === "before"
           ? messages.at(0)
           : messages.at(-1)
         : undefined;
 
     return {
-      messages: messages.map((message) => this.presentMessage(message)),
-      nextCursor: boundary
-        ? encodeSequenceCursor(boundary.sequenceNumber)
-        : null
+      messages: messages.map((message) => this.present(message)),
+      nextCursor: boundary ? encodeSequenceCursor(boundary.sequenceNumber) : null
     };
   }
 
-  async requireActiveConversationAgent(
-    conversationId: string,
-    conversationAgentId: string
-  ) {
-    const membership = await this.prisma.conversationAgent.findUnique({
-      where: { id: conversationAgentId }
-    });
-
-    if (
-      !membership ||
-      membership.conversationId !== conversationId ||
-      membership.status !== "active"
-    ) {
-      throw forbidden("Agent is not an active member of this conversation");
-    }
-
-    return membership;
-  }
-
-  private async createMessage(input: CreateMessageInput) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const message = await this.prisma.$transaction(async (tx) => {
-          const conversation = await tx.conversation.findUnique({
-            where: { id: input.conversationId },
-            select: { id: true }
-          });
-
-          if (!conversation) {
-            throw notFound("Conversation not found");
+  private present(message: MessageRow) {
+    const sender = message.senderAgent
+      ? {
+          type: "agent" as const,
+          id: message.senderAgent.id,
+          name: message.senderAgent.name,
+          handle: message.senderAgent.handle,
+          provider: message.senderAgent.provider
+        }
+      : message.senderUser
+        ? {
+            type: "user" as const,
+            id: message.senderUser.id,
+            name: message.senderUser.name,
+            avatarColor: message.senderUser.avatarColor
           }
-
-          const maxSequence = await tx.message.aggregate({
-            where: { conversationId: input.conversationId },
-            _max: { sequenceNumber: true }
-          });
-
-          const created = await tx.message.create({
-            data: {
-              conversationId: input.conversationId,
-              senderType: input.senderType,
-              senderId: input.senderId ?? null,
-              conversationAgentId: input.conversationAgentId ?? null,
-              role: input.role,
-              status: "complete",
-              content: input.content,
-              sequenceNumber: (maxSequence._max.sequenceNumber ?? 0) + 1,
-              metadata: (input.metadata ?? {}) as Prisma.InputJsonValue
-            },
-            include: {
-              conversationAgent: {
-                include: {
-                  agent: true
-                }
-              }
-            }
-          });
-
-          await tx.conversation.update({
-            where: { id: input.conversationId },
-            data: { lastMessageAt: created.createdAt }
-          });
-
-          return created;
-        });
-
-        await this.realtime.emit(
-          "message.created",
-          this.presentMessage(message),
-          input.conversationId
-        );
-        await this.realtime.emit("conversation.updated", {
-          conversationId: input.conversationId,
-          lastMessageAt: message.createdAt
-        });
-
-        try {
-          await this.qdrantMemory.indexMessage(message);
-        } catch (error) {
-          this.log.warn({ error, messageId: message.id }, "Qdrant indexing failed");
-        }
-
-        try {
-          await this.agentEvents.createMentionsForMessage(message);
-        } catch (error) {
-          this.log.warn(
-            { error, messageId: message.id },
-            "Agent mention event creation failed"
-          );
-        }
-
-        return this.presentMessage(message);
-      } catch (error) {
-        const maybePrismaError = error as { code?: string };
-        if (maybePrismaError.code === "P2002" && attempt < 2) {
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    throw new Error("Unable to create message");
-  }
-
-  private presentMessage<
-    TMessage extends {
-      senderType: string;
-      conversationAgent?: {
-        agent: {
-          id: string;
-          name: string;
-          handle: string;
-          provider: string;
-        };
-      } | null;
-    }
-  >(message: TMessage) {
-    const agent = message.conversationAgent?.agent;
+        : null;
 
     return {
-      ...message,
-      sender:
-        message.senderType === "agent" && agent
-          ? {
-              id: agent.id,
-              name: agent.name,
-              handle: agent.handle,
-              provider: agent.provider
-            }
-          : null
+      id: message.id,
+      conversationId: message.conversationId,
+      senderType: message.senderType,
+      role: message.role,
+      status: message.status,
+      content: message.content,
+      sequenceNumber: message.sequenceNumber,
+      createdAt: message.createdAt,
+      metadata: message.metadata,
+      sender
     };
   }
 }

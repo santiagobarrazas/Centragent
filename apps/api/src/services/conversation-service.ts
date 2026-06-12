@@ -1,21 +1,19 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import type { AppConfig } from "../config.js";
+import type { CreateConversationInput } from "@centragent/shared";
+import type { Principal } from "../auth/principal.js";
+import { actorType } from "../auth/principal.js";
 import { notFound } from "../errors.js";
+import type { DocumentService } from "./document-service.js";
+import type { MembershipService } from "./membership-service.js";
 import type { RealtimeService } from "./realtime-service.js";
 
-const encodeConversationCursor = (createdAt: Date, id: string) =>
+const encodeCursor = (createdAt: Date, id: string) =>
   `${createdAt.toISOString()}|${id}`;
 
-const decodeConversationCursor = (cursor?: string) => {
-  if (!cursor) {
-    return null;
-  }
-
+const decodeCursor = (cursor?: string) => {
+  if (!cursor) return null;
   const [createdAt, id] = cursor.split("|");
-  if (!createdAt || !id) {
-    return null;
-  }
-
+  if (!createdAt || !id) return null;
   const date = new Date(createdAt);
   return Number.isNaN(date.valueOf()) ? null : { createdAt: date, id };
 };
@@ -23,86 +21,150 @@ const decodeConversationCursor = (cursor?: string) => {
 export class ConversationService {
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly realtime: RealtimeService,
-    private readonly config: AppConfig
+    private readonly memberships: MembershipService,
+    private readonly documents: DocumentService,
+    private readonly realtime: RealtimeService
   ) {}
 
-  async list(limit: number, cursor?: string) {
-    const decodedCursor = decodeConversationCursor(cursor);
+  async create(principal: Principal, input: CreateConversationInput) {
+    await this.memberships.requireProjectRole(principal, input.projectId, "member");
 
-    const where: Prisma.ConversationWhereInput = decodedCursor
-        ? {
-            OR: [
-              { createdAt: { lt: decodedCursor.createdAt } },
-              {
-                createdAt: decodedCursor.createdAt,
-                id: { lt: decodedCursor.id }
-              }
-            ]
-          }
-        : {};
+    const conversation = await this.prisma.conversation.create({
+      data: {
+        projectId: input.projectId,
+        title: input.title,
+        createdById: principal.userId
+      }
+    });
 
-    const conversations = await this.prisma.conversation.findMany({
+    // The creator becomes an explicit participant so presence/messages anchor.
+    await this.prisma.membership.create({
+      data: {
+        principalType: actorType(principal),
+        userId: principal.agentId ? null : principal.userId,
+        agentId: principal.agentId,
+        projectId: input.projectId,
+        conversationId: conversation.id,
+        role: "member",
+        status: "active",
+        joinedAt: new Date()
+      }
+    });
+
+    await this.documents.ensureScoped({
+      kind: "conversation_summary",
+      title: `${conversation.title} summary`,
+      projectId: input.projectId,
+      conversationId: conversation.id,
+      agentEditable: true,
+      content: `# ${conversation.title}\n\n_This summary updates as the conversation grows._\n`
+    });
+
+    await this.realtime.emit(
+      "conversation.created",
+      this.present(conversation),
+      conversation.id
+    );
+    return conversation;
+  }
+
+  async list(
+    principal: Principal,
+    options: { projectId?: string | undefined; limit: number; cursor?: string | undefined }
+  ) {
+    const where: Prisma.ConversationWhereInput = { archivedAt: null };
+
+    if (actorType(principal) === "agent") {
+      where.memberships = {
+        some: {
+          agentId: principal.agentId!,
+          status: "active",
+          conversationId: { not: null }
+        }
+      };
+      if (options.projectId) where.projectId = options.projectId;
+    } else if (options.projectId) {
+      await this.memberships.requireProjectRole(principal, options.projectId, "viewer");
+      where.projectId = options.projectId;
+    } else {
+      const rows = await this.prisma.membership.findMany({
+        where: { userId: principal.userId, conversationId: null, status: "active" },
+        select: { projectId: true },
+        distinct: ["projectId"]
+      });
+      where.projectId = { in: rows.map((row) => row.projectId) };
+    }
+
+    const decoded = decodeCursor(options.cursor);
+    if (decoded) {
+      where.OR = [
+        { createdAt: { lt: decoded.createdAt } },
+        { createdAt: decoded.createdAt, id: { lt: decoded.id } }
+      ];
+    }
+
+    const rows = await this.prisma.conversation.findMany({
       where,
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      take: limit + 1,
+      take: options.limit + 1,
       include: {
         _count: {
           select: {
-            agents: {
-              where: { status: "active" }
-            }
+            memberships: { where: { status: "active", conversationId: { not: null } } }
           }
         }
       }
     });
 
-    const page = conversations.slice(0, limit);
-    const next = conversations.length > limit ? page.at(-1) : undefined;
+    const page = rows.slice(0, options.limit);
+    const next = rows.length > options.limit ? page.at(-1) : undefined;
 
     return {
       conversations: page.map((conversation) => ({
-        id: conversation.id,
-        title: conversation.title,
-        createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt,
-        lastMessageAt: conversation.lastMessageAt,
-        agentCount: conversation._count.agents
+        ...this.present(conversation),
+        participantCount: conversation._count.memberships
       })),
-      nextCursor: next
-        ? encodeConversationCursor(next.createdAt, next.id)
-        : null
+      nextCursor: next ? encodeCursor(next.createdAt, next.id) : null
     };
   }
 
-  async create(title: string) {
-    // TODO(auth): replace singleton owner assignment with authenticated user context.
-    const conversation = await this.prisma.conversation.create({
-      data: {
-        ownerId: this.config.MASTER_USER_ID,
-        title
-      }
-    });
-
-    await this.realtime.emit("conversation.created", conversation);
-    return conversation;
-  }
-
-  async get(conversationId: string) {
+  async get(principal: Principal, conversationId: string) {
+    const { projectId } = await this.memberships.resolveReadMembership(
+      principal,
+      conversationId
+    );
     const conversation = await this.prisma.conversation.findUnique({
-      where: { id: conversationId },
-      include: {
-        agents: {
-          include: { agent: true },
-          orderBy: { createdAt: "asc" }
-        }
-      }
+      where: { id: conversationId }
     });
-
     if (!conversation) {
       throw notFound("Conversation not found");
     }
+    const summary = await this.prisma.document.findFirst({
+      where: { conversationId, kind: "conversation_summary" },
+      select: { id: true }
+    });
+    return {
+      ...this.present(conversation),
+      projectId,
+      summaryDocumentId: summary?.id ?? null
+    };
+  }
 
-    return conversation;
+  private present(conversation: {
+    id: string;
+    projectId: string;
+    title: string;
+    createdAt: Date;
+    updatedAt: Date;
+    lastMessageAt: Date | null;
+  }) {
+    return {
+      id: conversation.id,
+      projectId: conversation.projectId,
+      title: conversation.title,
+      createdAt: conversation.createdAt,
+      updatedAt: conversation.updatedAt,
+      lastMessageAt: conversation.lastMessageAt
+    };
   }
 }
