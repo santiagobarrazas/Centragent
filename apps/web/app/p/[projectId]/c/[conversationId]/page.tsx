@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Search, Send } from "lucide-react";
 import {
   apiClient,
+  type Agent,
   type Message,
   type Participant,
   type SearchResult
@@ -12,6 +13,7 @@ import {
 import { DocEditor } from "@/components/DocEditor";
 import { useRealtimeEvent, useSubscribe } from "@/lib/realtime";
 import { Avatar, formatTime, providerLabel, useData } from "@/lib/ui";
+import { Plus } from "lucide-react";
 
 type SideTab = "participants" | "summary" | "search";
 
@@ -31,6 +33,8 @@ export default function ConversationPage({
   const [results, setResults] = useState<SearchResult[]>([]);
   const [embeddingsOn, setEmbeddingsOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [addingAgent, setAddingAgent] = useState(false);
+  const [myAgents, setMyAgents] = useState<Agent[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
 
   const mergeMessage = useCallback((incoming: Message) => {
@@ -96,6 +100,26 @@ export default function ConversationPage({
     const response = await apiClient.search(conversationId, query.trim());
     setResults(response.results);
     setEmbeddingsOn(response.embeddingConfigured);
+  };
+
+  const openAddAgent = async () => {
+    setAddingAgent(true);
+    try {
+      const response = await apiClient.listAgents();
+      setMyAgents(response.agents);
+    } catch (caught) {
+      setError((caught as Error).message);
+    }
+  };
+
+  const addAgent = async (agentId: string) => {
+    try {
+      await apiClient.addAgentToConversation(projectId, conversationId, agentId);
+      setAddingAgent(false);
+      loadParticipants();
+    } catch (caught) {
+      setError((caught as Error).message);
+    }
   };
 
   return (
@@ -177,36 +201,88 @@ export default function ConversationPage({
           </div>
           <div className="side-body">
             {side === "participants" ? (
-              participants.length === 0 ? (
-                <p className="muted">No participants yet. Agents appear here after they join.</p>
-              ) : (
-                participants.map((participant) => {
-                  const presence = participant.agent?.presences[0];
-                  const name = participant.user?.name ?? participant.agent?.name ?? "?";
-                  return (
-                    <div className="participant" key={participant.id}>
-                      <Avatar name={name} color={participant.user?.avatarColor} size={28} />
-                      <div className="info">
-                        <div className="name">
-                          {participant.agent ? (
-                            <Link href={`/a/${participant.agent.id}`}>{name}</Link>
+              <div className="col gap-2">
+                <div className="row between" style={{ marginBottom: 2 }}>
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {participants.length} participant{participants.length === 1 ? "" : "s"}
+                  </span>
+                  <button
+                    className="btn sm ghost"
+                    onClick={() => (addingAgent ? setAddingAgent(false) : void openAddAgent())}
+                  >
+                    <Plus size={13} /> Add agent
+                  </button>
+                </div>
+
+                {addingAgent
+                  ? (() => {
+                      const present = new Set(
+                        participants.map((p) => p.agent?.id).filter(Boolean)
+                      );
+                      const available = myAgents.filter((agent) => !present.has(agent.id));
+                      return (
+                        <div className="card pad col gap-1" style={{ marginBottom: 6 }}>
+                          {available.length === 0 ? (
+                            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                              All your agents are already here.
+                            </p>
                           ) : (
-                            name
+                            available.map((agent) => (
+                              <button
+                                key={agent.id}
+                                className="participant"
+                                style={{ width: "100%" }}
+                                onClick={() => void addAgent(agent.id)}
+                              >
+                                <Avatar name={agent.name} size={24} />
+                                <div className="info">
+                                  <div className="name">{agent.name}</div>
+                                  <div className="status">
+                                    @{agent.handle} · {providerLabel(agent.provider)}
+                                  </div>
+                                </div>
+                                <Plus size={14} className="muted" />
+                              </button>
+                            ))
                           )}
                         </div>
-                        <div className="status">
-                          {participant.agent
-                            ? `${providerLabel(participant.agent.provider)}${presence?.activityTitle ? ` · ${presence.activityTitle}` : ""}`
-                            : "you / member"}
+                      );
+                    })()
+                  : null}
+
+                {participants.length === 0 ? (
+                  <p className="muted">
+                    No participants yet. Add one of your agents, or it appears after it joins.
+                  </p>
+                ) : (
+                  participants.map((participant) => {
+                    const presence = participant.agent?.presences[0];
+                    const name = participant.user?.name ?? participant.agent?.name ?? "?";
+                    return (
+                      <div className="participant" key={participant.id}>
+                        <Avatar name={name} color={participant.user?.avatarColor} size={28} />
+                        <div className="info">
+                          <div className="name">
+                            {participant.agent ? (
+                              <Link href={`/a/${participant.agent.id}`}>{name}</Link>
+                            ) : (
+                              name
+                            )}
+                          </div>
+                          <div className="status">
+                            {participant.agent
+                              ? `${providerLabel(participant.agent.provider)}${presence?.activityTitle ? ` · ${presence.activityTitle}` : ""}`
+                              : "you / member"}
+                          </div>
                         </div>
+                        {participant.agent ? (
+                          <span className={`dot ${presence?.status ?? "offline"}`} />
+                        ) : null}
                       </div>
-                      {participant.agent ? (
-                        <span className={`dot ${presence?.status ?? "offline"}`} />
-                      ) : null}
-                    </div>
-                  );
-                })
-              )
+                    );
+                  })
+                )}
+              </div>
             ) : null}
 
             {side === "summary" ? (

@@ -242,6 +242,11 @@ export const apiClient = {
     }),
   listParticipants: (conversationId: string) =>
     api<{ participants: Participant[] }>(`/conversations/${conversationId}/participants`),
+  addAgentToConversation: (projectId: string, conversationId: string, agentId: string) =>
+    api<{ membership: unknown }>(`/projects/${projectId}/members`, {
+      method: "POST",
+      body: body({ agentId, conversationId, role: "member" })
+    }),
   search: (conversationId: string, query: string) =>
     api<{ results: SearchResult[]; embeddingConfigured: boolean }>(
       `/conversations/${conversationId}/search`,

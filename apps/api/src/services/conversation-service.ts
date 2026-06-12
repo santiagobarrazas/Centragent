@@ -86,6 +86,8 @@ export class ConversationService {
     } else if (options.projectId) {
       await this.memberships.requireProjectRole(principal, options.projectId, "viewer");
       where.projectId = options.projectId;
+    } else if (this.memberships.isSuperuser(principal)) {
+      // Superuser sees all conversations across projects.
     } else {
       const rows = await this.prisma.membership.findMany({
         where: { userId: principal.userId, conversationId: null, status: "active" },

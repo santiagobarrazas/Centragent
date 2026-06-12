@@ -29,10 +29,26 @@ const actorWhere = (principal: Principal) =>
 export class MembershipService {
   constructor(private readonly prisma: PrismaClient) {}
 
+  /**
+   * The local owner is the instance superuser: they administer everything on
+   * their own machine and can never be locked out by a missing/wrong membership.
+   * (An agent token is never a superuser, even if its owner is the local owner.)
+   */
+  isSuperuser(principal: Principal): boolean {
+    return principal.isLocalOwner && !principal.agentId;
+  }
+
   // --- read scoping ---------------------------------------------------------
 
   /** Project ids the acting principal can see (any active membership). */
   async accessibleProjectIds(principal: Principal): Promise<string[]> {
+    if (this.isSuperuser(principal)) {
+      const all = await this.prisma.project.findMany({
+        where: { archivedAt: null },
+        select: { id: true }
+      });
+      return all.map((row) => row.id);
+    }
     const rows = await this.prisma.membership.findMany({
       where: { ...actorWhere(principal), status: "active" },
       select: { projectId: true },
@@ -77,7 +93,18 @@ export class MembershipService {
     projectId: string,
     minRole: ProjectRole = "viewer"
   ): Promise<Membership> {
-    const membership = await this.projectMembership(principal, projectId);
+    let membership = await this.projectMembership(principal, projectId);
+    // The superuser is always owner of any project they touch (self-heals a
+    // missing or under-privileged membership).
+    if ((!membership || !roleAtLeast(membership.role, minRole)) && this.isSuperuser(principal)) {
+      const project = await this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true }
+      });
+      if (project) {
+        membership = await this.ensureProjectOwnerMembership(principal.userId, projectId);
+      }
+    }
     if (!membership || !roleAtLeast(membership.role, minRole)) {
       throw forbidden("You do not have access to this project");
     }
@@ -117,6 +144,13 @@ export class MembershipService {
       if (projectMembership) {
         return { projectId: conversation.projectId, membership: projectMembership };
       }
+      if (this.isSuperuser(principal)) {
+        const owner = await this.ensureProjectOwnerMembership(
+          principal.userId,
+          conversation.projectId
+        );
+        return { projectId: conversation.projectId, membership: owner };
+      }
     }
 
     throw forbidden("You are not a participant of this conversation");
@@ -155,6 +189,13 @@ export class MembershipService {
       if (projectMembership && roleAtLeast(projectMembership.role, "member")) {
         return { projectId: conversation.projectId, membership: projectMembership };
       }
+      if (this.isSuperuser(principal)) {
+        const owner = await this.ensureProjectOwnerMembership(
+          principal.userId,
+          conversation.projectId
+        );
+        return { projectId: conversation.projectId, membership: owner };
+      }
     }
 
     throw forbidden(
@@ -185,12 +226,18 @@ export class MembershipService {
 
   // --- mutations ------------------------------------------------------------
 
-  /** Project creator becomes owner; idempotent. */
+  /** Ensure the user is an active OWNER of the project (idempotent; upgrades). */
   async ensureProjectOwnerMembership(userId: string, projectId: string) {
     const existing = await this.prisma.membership.findFirst({
       where: { userId, projectId, conversationId: null }
     });
     if (existing) {
+      if (existing.role !== "owner" || existing.status !== "active") {
+        return this.prisma.membership.update({
+          where: { id: existing.id },
+          data: { role: "owner", status: "active", leftAt: null }
+        });
+      }
       return existing;
     }
     return this.prisma.membership.create({

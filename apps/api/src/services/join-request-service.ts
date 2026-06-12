@@ -35,18 +35,24 @@ export class JoinRequestService {
     const where: Prisma.JoinRequestWhereInput = {
       status,
       ...(status === "pending" ? { expiresAt: { gt: new Date() } } : {}),
-      conversation: {
-        project: {
-          memberships: {
-            some: {
-              userId: principal.userId,
-              conversationId: null,
-              status: "active",
-              role: { in: ["owner", "admin"] }
+      // The superuser sees every pending request; others only requests in
+      // projects they administer.
+      ...(this.memberships.isSuperuser(principal)
+        ? {}
+        : {
+            conversation: {
+              project: {
+                memberships: {
+                  some: {
+                    userId: principal.userId,
+                    conversationId: null,
+                    status: "active",
+                    role: { in: ["owner", "admin"] }
+                  }
+                }
+              }
             }
-          }
-        }
-      }
+          })
     };
 
     const joinRequests = await this.prisma.joinRequest.findMany({
