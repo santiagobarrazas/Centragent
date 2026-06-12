@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiClient } from "@/lib/api";
 import { useApp } from "@/components/Shell";
+import { Logo } from "@/components/Logo";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -38,7 +39,7 @@ export default function LoginPage() {
       <div className="card auth-card">
         <div className="row gap-3" style={{ marginBottom: 20 }}>
           <div className="mark" style={{ margin: 0 }}>
-            C
+            <Logo size={24} />
           </div>
           <div>
             <div style={{ fontWeight: 700, fontSize: 16 }}>Centragent</div>

@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Bot, Check, FolderGit2, LogOut, Plug, X } from "lucide-react";
 import { apiClient, type JoinRequest, type Whoami } from "@/lib/api";
 import { useRealtimeEvent } from "@/lib/realtime";
+import { Logo } from "@/components/Logo";
 import { Avatar, providerLabel, secondsLeft } from "@/lib/ui";
 
 type AppCtx = { whoami: Whoami | null; reloadWhoami: () => void };
@@ -85,7 +86,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <div className="shell">
         <nav className="rail">
           <Link href="/" className="mark" aria-label="Centragent home">
-            C
+            <Logo size={22} />
           </Link>
           {railItem("/", "Projects", <FolderGit2 size={18} />, (p) => p === "/" || p.startsWith("/p"))}
           {railItem("/agents", "Agents", <Bot size={18} />, (p) => p.startsWith("/a"))}
