@@ -1,3 +1,11 @@
+# Shared build for all app containers — built once, reused by every service so
+# Compose never tries to pull the local-only centragent-dev:local image.
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: centragent-dev:local
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -37,10 +45,7 @@ services:
       - qdrant_data:/qdrant/storage
 
   migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: centragent-dev:local
+    <<: *app-image
     environment:
       DATABASE_URL: "postgresql://centragent:centragent@postgres:5432/centragent?schema=public"
       REDIS_URL: "redis://redis:6379"
@@ -53,7 +58,7 @@ services:
     command: sh -lc "corepack pnpm db:setup"
 
   api:
-    image: centragent-dev:local
+    <<: *app-image
     # Optional so a fresh clone boots on config.ts defaults without a host .env.
     env_file:
       - path: .env
@@ -78,7 +83,7 @@ services:
     command: corepack pnpm --filter @centragent/api dev
 
   mcp:
-    image: centragent-dev:local
+    <<: *app-image
     environment:
       MCP_HOST: "0.0.0.0"
       MCP_PORT: "3001"
@@ -91,7 +96,7 @@ services:
     command: corepack pnpm --filter @centragent/mcp dev
 
   web:
-    image: centragent-dev:local
+    <<: *app-image
     environment:
       NEXT_PUBLIC_API_URL: "http://127.0.0.1:4000"
       NEXT_PUBLIC_WS_URL: "ws://127.0.0.1:4000/ws"
