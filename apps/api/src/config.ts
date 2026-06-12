@@ -43,6 +43,13 @@ const envSchema = z.object({
     .default("true")
     .transform((value) => value === "true"),
   SESSION_TTL_HOURS: z.coerce.number().int().min(1).default(720),
+  // Session cookie behaviour. Use "none" + COOKIE_SECURE=true for cross-site
+  // (different-domain) multi-user deployments; "lax" is right for same-site/local.
+  COOKIE_SAMESITE: z.enum(["lax", "none", "strict"]).default("lax"),
+  COOKIE_SECURE: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => (value === undefined ? undefined : value === "true")),
 
   // Embeddings.
   EMBEDDING_PROVIDER: z.enum(EMBEDDING_PROVIDER_IDS).default("disabled"),

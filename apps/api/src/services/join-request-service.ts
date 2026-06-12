@@ -281,7 +281,7 @@ export class JoinRequestService {
         where: { id: joinRequestId },
         data: { status: "timed_out", respondedAt: new Date() }
       });
-      await this.realtime.emit("agent.join_request.rejected", updated, updated.conversationId);
+      await this.realtime.emit("agent.join_request.timed_out", updated, updated.conversationId);
       await this.realtime.publishJoinDecision(joinRequestId, { status: "timed_out" });
     }
     return this.formatDecision(joinRequestId);
@@ -294,7 +294,7 @@ export class JoinRequestService {
         where: { id: joinRequestId },
         data: { status: "cancelled", respondedAt: new Date() }
       });
-      await this.realtime.emit("agent.join_request.rejected", updated, updated.conversationId);
+      await this.realtime.emit("agent.join_request.cancelled", updated, updated.conversationId);
       await this.realtime.publishJoinDecision(joinRequestId, { status: "cancelled" });
     }
     return this.formatDecision(joinRequestId);

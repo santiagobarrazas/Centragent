@@ -58,12 +58,17 @@ const controllerForRequest = (request: FastifyRequest) => {
 
 export async function registerRoutes(app: FastifyInstance, services: Services) {
   const setSession = (reply: FastifyReply, token: string, expiresAt: Date) => {
+    const sameSite = services.config.COOKIE_SAMESITE;
+    // SameSite=None mandates Secure; otherwise honour COOKIE_SECURE or prod.
+    const secure =
+      services.config.COOKIE_SECURE ??
+      (sameSite === "none" || services.config.NODE_ENV === "production");
     reply.setCookie(SESSION_COOKIE, token, {
       httpOnly: true,
-      sameSite: "lax",
+      sameSite,
       path: "/",
       expires: expiresAt,
-      secure: services.config.NODE_ENV === "production"
+      secure
     });
   };
 
@@ -116,7 +121,15 @@ export async function registerRoutes(app: FastifyInstance, services: Services) {
     // The raw token is returned exactly once.
     return reply.code(201).send({
       token,
-      tokenInfo: { id: record.id, kind: record.kind, prefix: record.prefix, label: record.label }
+      tokenInfo: {
+        id: record.id,
+        kind: record.kind,
+        prefix: record.prefix,
+        label: record.label,
+        agentId: record.agentId,
+        lastUsedAt: record.lastUsedAt,
+        createdAt: record.createdAt
+      }
     });
   });
 
@@ -478,7 +491,9 @@ export async function registerRoutes(app: FastifyInstance, services: Services) {
   });
 
   app.get("/join-requests", async (request) => {
-    const principal = requirePrincipal(request);
+    // Admitting agents is a human-admin action; agent tokens cannot enumerate
+    // the owner's pending-request queue.
+    const principal = requireUserPrincipal(request);
     const query = parse(z.object({ status: z.string().optional() }), request.query);
     return services.joinRequests.list(principal, query.status);
   });

@@ -55,6 +55,14 @@ app.setErrorHandler((error, _request, reply) => {
     });
   }
 
+  // Prisma unique-constraint races (e.g. concurrent membership creation) are a
+  // conflict, not a server error.
+  if ((error as { code?: unknown }).code === "P2002") {
+    return reply.status(409).send({
+      error: { code: "CONFLICT", message: "That resource already exists" }
+    });
+  }
+
   const httpError = error as { code?: unknown; message?: unknown; statusCode?: unknown };
   if (typeof httpError.statusCode === "number" && httpError.statusCode >= 400) {
     return reply.status(httpError.statusCode).send({

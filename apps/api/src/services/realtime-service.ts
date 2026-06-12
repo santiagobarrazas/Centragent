@@ -65,6 +65,17 @@ export class RealtimeService {
         return;
       }
 
+      // Anti-CSWSH: a cookie/local-owner connection is ambient browser auth, so
+      // require an allow-listed Origin on the upgrade. Bearer-token connections
+      // are not browser-ambient and are exempt.
+      if (principal.via !== "token") {
+        const origin = request.headers.origin;
+        if (!origin || !this.config.API_CORS_ORIGINS.includes(origin)) {
+          socket.close();
+          return;
+        }
+      }
+
       const client: WsClient = { socket, principal, conversations: new Set() };
       this.clients.add(client);
       socket.send(

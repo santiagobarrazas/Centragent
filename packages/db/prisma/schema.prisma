@@ -337,6 +337,8 @@ model Document {
   visibility       Visibility   @default(shared)
   // Fast-read snapshot of the latest version's content.
   currentContent   String       @default("") @map("current_content")
+  // Race-free per-document version allocator (UPDATE ... RETURNING).
+  versionSeq       Int          @default(0) @map("version_seq")
   currentVersionId String?      @unique @map("current_version_id") @db.Uuid
   // Link to this doc's point in the vector index, when indexed.
   pointId          String?      @map("point_id")

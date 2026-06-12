@@ -1,4 +1,4 @@
-import type { Document, DocumentKind, Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type Document, type DocumentKind, type PrismaClient } from "@prisma/client";
 import type { DocumentRefInput } from "@centragent/shared";
 import type { Principal } from "../auth/principal.js";
 import { actorType } from "../auth/principal.js";
@@ -59,7 +59,8 @@ export class DocumentService {
           agentEditable: input.agentEditable ?? !isNotes,
           isPrivate: isNotes,
           visibility: isNotes ? "private" : "shared",
-          currentContent: content
+          currentContent: content,
+          versionSeq: 1
         }
       });
       const version = await tx.documentVersion.create({
@@ -220,14 +221,18 @@ export class DocumentService {
     }
   ) {
     const updated = await this.prisma.$transaction(async (tx) => {
-      const max = await tx.documentVersion.aggregate({
-        where: { documentId: document.id },
-        _max: { versionNumber: true }
-      });
+      // Race-free per-document version allocation (mirrors message_seq).
+      const rows = await tx.$queryRaw<Array<{ version_seq: number }>>(Prisma.sql`
+        UPDATE "documents"
+        SET "version_seq" = "version_seq" + 1
+        WHERE "id" = ${document.id}::uuid
+        RETURNING "version_seq"
+      `);
+      const versionNumber = rows[0]?.version_seq ?? 1;
       const version = await tx.documentVersion.create({
         data: {
           documentId: document.id,
-          versionNumber: (max._max.versionNumber ?? 0) + 1,
+          versionNumber,
           content,
           editSource: meta.editSource,
           authorType: meta.authorType,

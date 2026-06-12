@@ -54,6 +54,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
     if (envelope.event.startsWith("agent.join_request")) reloadJoins();
   }, []);
 
+  // Redirect unauthenticated users out of band (never during render).
+  useEffect(() => {
+    if (authChecked && !whoami && !isAuthPage) router.replace("/login");
+  }, [authChecked, whoami, isAuthPage, router]);
+
   if (isAuthPage) {
     return (
       <Ctx.Provider value={{ whoami, reloadWhoami }}>{children}</Ctx.Provider>
@@ -61,7 +66,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
   }
 
   if (authChecked && !whoami) {
-    if (typeof window !== "undefined") router.replace("/login");
     return null;
   }
 

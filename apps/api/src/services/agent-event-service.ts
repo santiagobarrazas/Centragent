@@ -217,8 +217,8 @@ export class AgentEventService {
     if (!activity) {
       throw notFound("Active agent activity not found");
     }
-    if (activity.agentId !== agentId) {
-      throw forbidden("Activity does not belong to this agent");
+    if (activity.agentId !== agentId || activity.conversationId !== input.conversationId) {
+      throw forbidden("Activity does not belong to this agent and conversation");
     }
 
     const updated = await this.prisma.agentActivity.update({

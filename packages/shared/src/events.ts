@@ -12,6 +12,8 @@ export type RealtimeEventName =
   | "agent.join_request.created"
   | "agent.join_request.accepted"
   | "agent.join_request.rejected"
+  | "agent.join_request.timed_out"
+  | "agent.join_request.cancelled"
   | "agent.joined"
   | "agent.left"
   | "agent.presence.updated"
