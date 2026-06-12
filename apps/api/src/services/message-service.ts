@@ -164,8 +164,10 @@ export class MessageService {
       select: { handle: true }
     });
     if (!caller) return;
-    const detail = declines.map((d) => `${d.name} (@${d.handle}) ${d.reason}`).join("; ");
-    const content = `@${caller.handle} ${detail}. Please acknowledge — let the user know or take another approach.`;
+    // IMPORTANT: never @-mention the declined agent here — that would re-trigger
+    // it (system mentions bypass the availability check). Use a plain handle.
+    const detail = declines.map((d) => `${d.name} (${d.handle}) ${d.reason}`).join("; ");
+    const content = `@${caller.handle} ${detail}. Please acknowledge — let the user know or take another approach. (Do not re-mention that agent.)`;
     await this.postSystemMessage(conversationId, content, {
       depth: parentChain.depth,
       agentIds: parentChain.agentIds,
