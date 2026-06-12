@@ -14,6 +14,8 @@ type CodexEvent = {
 // so there is no per-run config file to write.
 export const codexAdapter: AgentToolAdapter = {
   provider: "codex",
+  // codex exec answers in stdout and does not reliably call send_message headless.
+  repliesInStdout: true,
 
   buildMcpConfig() {
     return { path: "", cleanup: () => {} };
@@ -43,7 +45,12 @@ export const codexAdapter: AgentToolAdapter = {
             model: event.model ?? "codex"
           });
         }
-        if (event.item?.type === "assistant_message" && event.item.text) {
+        // codex 0.139.x emits the final answer as item.type "agent_message"
+        // (older builds used "assistant_message"); accept both.
+        if (
+          (event.item?.type === "agent_message" || event.item?.type === "assistant_message") &&
+          event.item.text
+        ) {
           result.text = event.item.text;
         }
       }

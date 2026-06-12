@@ -84,6 +84,7 @@ function makeAdapter(opts: {
 }): AgentToolAdapter {
   return {
     provider: opts.provider,
+    repliesInStdout: true,
     buildMcpConfig: opts.buildMcpConfig ?? noMcpConfig,
     async spawn(invocation, onUsage) {
       const result: RunResult = { isError: false };

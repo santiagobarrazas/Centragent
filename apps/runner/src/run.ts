@@ -45,11 +45,94 @@ const ack = (ctx: WorkerContext, deliveryIds: string[]) =>
         .request("/agent/inbox/ack", { method: "POST", body: { deliveryIds } })
         .catch(() => undefined);
 
-function buildPrompt(ctx: WorkerContext, event: InboxDelivery["event"], conversationId: string) {
+const SILENCE_SENTINEL = "NO_REPLY";
+
+type ConvMessage = {
+  sequenceNumber: number;
+  senderType: string;
+  content: string;
+  sender?: { type: string; id: string; handle?: string; name?: string } | null;
+};
+
+/** Recent messages, oldest-first, token-bound. Empty on any failure. */
+async function fetchRecentMessages(
+  ctx: WorkerContext,
+  conversationId: string,
+  limit: number
+): Promise<ConvMessage[]> {
+  try {
+    const res = await ctx.backend.request<{ messages: ConvMessage[] }>(
+      `/conversations/${conversationId}/messages`,
+      { query: { limit, direction: "before" } }
+    );
+    return res.messages ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/** Highest sequence number of a message THIS agent authored (−1 if none). */
+function maxOwnSeq(messages: ConvMessage[], agentId: string): number {
+  let max = -1;
+  for (const m of messages) {
+    if (m.sender?.type === "agent" && m.sender.id === agentId && m.sequenceNumber > max) {
+      max = m.sequenceNumber;
+    }
+  }
+  return max;
+}
+
+function formatTranscript(messages: ConvMessage[]): string {
+  return messages
+    .map((m) => {
+      const who =
+        m.sender?.type === "agent"
+          ? `@${m.sender.handle ?? "agent"}`
+          : m.sender?.type === "user"
+            ? (m.sender.name ?? "user")
+            : m.senderType;
+      return `${who}: ${String(m.content).slice(0, 600)}`;
+    })
+    .join("\n");
+}
+
+function buildPrompt(
+  ctx: WorkerContext,
+  event: InboxDelivery["event"],
+  conversationId: string,
+  recent: ConvMessage[]
+) {
+  const intro = `You are the agent @${ctx.handle} in Centragent, a multi-agent workspace.`;
+  const notified = `You were notified (event: ${event.type}) in conversation ${conversationId}.`;
+  const trigger = event.content
+    ? `The triggering message was:\n"""\n${String(event.content).slice(0, 2000)}\n"""`
+    : "";
+
+  // Stdout-reply tools (codex, the loose CLIs) get context pre-injected and just
+  // write their answer — the runner posts it. No dependency on a named tool call.
+  if (ctx.adapter.repliesInStdout) {
+    const transcript = formatTranscript(recent);
+    return [
+      intro,
+      notified,
+      transcript
+        ? `Recent conversation (oldest first; the last line is what triggered you):\n"""\n${transcript}\n"""`
+        : trigger,
+      "",
+      "Write ONE concise, useful reply as your FINAL message — it is posted to the conversation for you automatically.",
+      `If this mention does not need a response from you, reply with exactly: ${SILENCE_SENTINEL}`,
+      "You also have Centragent MCP tools (search_memory, read_document, append_note, set_presence) for optional side-effects — use them only if genuinely useful. You do NOT need to call send_message.",
+      "Only @mention another agent if you truly need them."
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  // Tools that reliably drive the MCP tools themselves (claude-code).
   return [
-    `You are the agent @${ctx.handle} in Centragent, a multi-agent workspace. You have Centragent MCP tools available.`,
-    `You were notified (event: ${event.type}) in conversation ${conversationId}.`,
-    event.content ? `The triggering message was:\n"""\n${String(event.content).slice(0, 2000)}\n"""` : "",
+    `${intro} You have Centragent MCP tools available.`,
+    notified,
+    trigger,
     "",
     "React autonomously:",
     `1. centragent_read_conversation { conversationId: "${conversationId}" } to read recent context.`,
@@ -141,12 +224,18 @@ export async function executeRun(
   let costUsd: number | undefined;
   let turns: number | undefined;
   let sessionId: string | undefined;
+  let replyText: string | undefined;
+
+  // One read: grounds the stdout-tool prompt AND sets the double-post baseline
+  // (the agent's latest message BEFORE this run).
+  const recent = await fetchRecentMessages(ctx, conversationId, 20);
+  const lastOwnSeq = maxOwnSeq(recent, ctx.agentId);
 
   const mcp = ctx.adapter.buildMcpConfig(ctx.token, ctx.mcpUrl);
   try {
     const result = await ctx.adapter.spawn(
       {
-        prompt: buildPrompt(ctx, event, conversationId),
+        prompt: buildPrompt(ctx, event, conversationId, recent),
         mcpConfigPath: mcp.path,
         allowedTools: ALLOWED_TOOLS,
         maxTurns: config.RUNNER_MAX_TURNS,
@@ -159,6 +248,7 @@ export async function executeRun(
     sessionId = result.sessionId ?? undefined;
     costUsd = result.costUsd ?? (cumulativeCost > 0 ? cumulativeCost : undefined);
     turns = result.turns;
+    replyText = result.text;
     if (result.isError) {
       status = "failed";
       error = (result.text ?? "tool error").slice(0, 500);
@@ -169,6 +259,25 @@ export async function executeRun(
   } finally {
     clearTimeout(wall);
     mcp.cleanup();
+  }
+
+  // Runner OWNS the conversational reply (hybrid). If the agent did not post a
+  // message during the run, post its final text on its behalf. This routes through
+  // the SAME MessageService.post as the MCP send_message tool (same autonomy guard,
+  // same hop chain). It MUST run while the AgentRun is still 'running' (before the
+  // PATCH below) so findActiveRun extends the chain and any @mention in the reply
+  // triggers downstream agents under the guard.
+  if (status === "completed" && replyText) {
+    const trimmed = replyText.trim();
+    const silent = trimmed.length === 0 || trimmed.toUpperCase() === SILENCE_SENTINEL;
+    if (!silent) {
+      const after = await fetchRecentMessages(ctx, conversationId, 20);
+      if (maxOwnSeq(after, ctx.agentId) <= lastOwnSeq) {
+        await ctx.backend
+          .request("/agent/messages", { method: "POST", body: { conversationId, content: trimmed } })
+          .catch(() => undefined);
+      }
+    }
   }
 
   await ctx.backend
