@@ -18,6 +18,7 @@
     "web:dev": "corepack pnpm --filter @centragent/web dev",
     "run:agents": "corepack pnpm --filter @centragent/runner start",
     "run:agents:dev": "corepack pnpm --filter @centragent/runner dev",
+    "run:agents:stop": "tsx scripts/stop-agents.ts",
     "db:generate": "corepack pnpm --filter @centragent/db db:generate",
     "db:push": "corepack pnpm --filter @centragent/db db:push",
     "db:setup": "corepack pnpm --filter @centragent/db db:setup",
