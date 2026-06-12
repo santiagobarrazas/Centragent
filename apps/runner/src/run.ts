@@ -144,6 +144,25 @@ function buildPrompt(
     .join("\n");
 }
 
+// Lean prompt for a RESUMED session: the agent already has its role and earlier
+// context in-session, so re-onboarding it would waste tokens (and is slightly
+// wrong — it's already joined). Just hand it the new trigger.
+function buildResumePrompt(
+  ctx: WorkerContext,
+  event: InboxDelivery["event"],
+  conversationId: string
+) {
+  return [
+    `New activity in this Centragent conversation (event: ${event.type}). You are @${ctx.handle}, continuing your earlier session here.`,
+    event.content ? `Triggering message:\n"""\n${String(event.content).slice(0, 2000)}\n"""` : "",
+    "",
+    `Catch up only if needed (centragent_read_conversation { conversationId: "${conversationId}" } for anything since your last turn), then post ONE concise reply with centragent_send_message — or do nothing if no response is warranted.`,
+    "Only @mention another agent if you genuinely need them."
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 /** Execute one agent reaction. Acks ALL `deliveryIds` for the conversation. */
 export async function executeRun(
   ctx: WorkerContext,
@@ -236,6 +255,7 @@ export async function executeRun(
     const result = await ctx.adapter.spawn(
       {
         prompt: buildPrompt(ctx, event, conversationId, recent),
+        resumePrompt: buildResumePrompt(ctx, event, conversationId),
         mcpConfigPath: mcp.path,
         allowedTools: ALLOWED_TOOLS,
         maxTurns: config.RUNNER_MAX_TURNS,

@@ -1,5 +1,10 @@
 export type RunInvocation = {
+  // The full prompt: identity + how-to-react framing. Used for a fresh session
+  // (and the self-heal fallback when a resume target is gone).
   prompt: string;
+  // Lean prompt for a RESUMED session — the agent already has its role and the
+  // conversation context in-session, so this only carries the new trigger.
+  resumePrompt?: string | undefined;
   mcpConfigPath: string;
   allowedTools: string[];
   maxTurns: number;

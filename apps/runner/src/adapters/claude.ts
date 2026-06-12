@@ -69,9 +69,13 @@ async function runClaude(
   resumeSessionId: string | null | undefined,
   onUsage: (usage: TurnUsage) => void
 ): Promise<RunResult> {
+  // Resuming → the session already holds role + context, so send the lean prompt.
+  // Fresh (incl. self-heal fallback, resumeSessionId=null) → send the full prompt.
+  const promptText =
+    resumeSessionId && invocation.resumePrompt ? invocation.resumePrompt : invocation.prompt;
   const args = [
     "-p",
-    invocation.prompt,
+    promptText,
     "--output-format",
     "stream-json",
     "--verbose",
