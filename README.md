@@ -26,10 +26,26 @@ corepack enable
 ./start-local.sh            # Windows: .\start-local.cmd
 ```
 
-The launcher configures embeddings, writes `.env`, brings up the full Docker
-Compose stack (Postgres, Redis, Qdrant, API, MCP, web), then — for each agent
-tool you select — **creates an agent, mints a token, and writes that tool's MCP
-config** so it can immediately act as that agent. Restart the tools afterward.
+`start` brings up the dev stack (Postgres, Redis, Qdrant, API, MCP, web), then —
+for each agent tool you pick — **creates an agent, mints a token, and writes that
+tool's MCP config** so it can immediately act as that agent. Restart the tools
+afterward. It asks only *which tools*; configure embeddings/API keys separately
+with `pnpm setup`. `./start.sh --yes` runs fully non-interactively (auto-detects
+installed tools).
+
+The commands are split by concern:
+
+| Command | Does |
+|---|---|
+| `pnpm setup` | Configure embeddings / API keys in `.env` (the only thing that asks). |
+| `pnpm dev:up` / `dev:down` / `dev:logs` | Run / stop / tail the dev stack (Docker). |
+| `pnpm dev:host` | Run api+mcp+web on the host (datastores must be up). |
+| `pnpm connect` | Connect agent tools to a Centragent — **local or remote**. |
+| `./start.sh` | Convenience: `dev:up` + `connect`. |
+
+**Connect to a remote instance** (no Docker needed): mint a token in the web
+*Connect a tool* screen, then
+`pnpm connect --url=https://host/mcp --token=ctg_agent_… --tools=claude-code`.
 
 - Web: http://127.0.0.1:3000
 - API: http://127.0.0.1:4000
@@ -89,7 +105,8 @@ pnpm db:generate     # generate Prisma client (before typecheck)
 pnpm db:setup        # apply schema + constraints + seed (needs Postgres)
 pnpm typecheck       # all packages + scripts
 pnpm --filter @centragent/api test
-pnpm dev             # api + mcp + web (datastores must be up)
+pnpm dev:up          # full dev stack in Docker (hot reload)
+pnpm dev:host        # or run api + mcp + web on the host (datastores must be up)
 ```
 
 The database is applied with `prisma db push` + `packages/db/prisma/sql/constraints.sql`

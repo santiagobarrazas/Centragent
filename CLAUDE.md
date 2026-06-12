@@ -48,16 +48,26 @@ in the body as a capability.
 
 ## Commands
 
+The scripts are split by concern — configure, run the stack, connect a client tool:
+
 ```bash
 pnpm install              # install deps
 pnpm db:generate          # generate Prisma client (needed before typecheck)
 pnpm db:setup             # db push + apply constraints.sql + seed  (needs Postgres)
 pnpm typecheck            # tsc across all packages + scripts
 pnpm --filter @centragent/api test   # vitest unit tests (e2e gated on CENTRAGENT_E2E_URL)
-pnpm dev                  # run api + mcp + web (needs datastores up)
-pnpm start:local          # interactive launcher (full Docker stack + tool install)
-pnpm compose:up           # docker compose up --build -d
+
+# run the stack (Docker)
+pnpm dev:up / dev:down / dev:logs    # the dev stack
+pnpm dev:host             # run api+mcp+web on the host (datastores must be up)
+
+# configure + connect
+pnpm setup                # interactive: embeddings / API keys in .env (only this asks)
+pnpm connect             # connect agent tools to a local OR remote Centragent
+pnpm start:local          # convenience: dev:up + connect (prompts tools only); --quick variant via start:local:quick
 ```
+
+Script entrypoints live in `scripts/` (`setup-env.ts`, `connect.ts`, `start.ts`) over shared `scripts/lib/` modules (`env`, `prompt`, `mcp`, `docker`). `./start.sh` / `start.cmd` wrap `start:local` / `start:local:quick`.
 
 The DB is applied with `prisma db push` + `prisma/sql/constraints.sql` (the
 CHECK constraints and partial unique indexes Prisma can't express), **not**
