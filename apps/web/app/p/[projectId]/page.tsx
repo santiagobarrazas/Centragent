@@ -4,7 +4,7 @@ import { use, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, FileText, MessagesSquare, Plus, Users } from "lucide-react";
-import { apiClient } from "@/lib/api";
+import { apiClient, type Agent } from "@/lib/api";
 import { DocEditor } from "@/components/DocEditor";
 import { Avatar, formatTime, providerLabel, useData } from "@/lib/ui";
 
@@ -24,6 +24,8 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
   const [inviteCode, setInviteCode] = useState<string | null>(null);
   const [openAsset, setOpenAsset] = useState<string | null>(null);
   const [assetTitle, setAssetTitle] = useState("");
+  const [addingAgent, setAddingAgent] = useState(false);
+  const [ownedAgents, setOwnedAgents] = useState<Agent[]>([]);
 
   if (project.error) {
     return <div className="pad"><div className="banner error">{project.error}</div></div>;
@@ -46,6 +48,18 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
   const invite = async () => {
     const result = await apiClient.createInvite(projectId, "member");
     setInviteCode(result.code);
+  };
+
+  const openAddAgent = async () => {
+    setAddingAgent(true);
+    const response = await apiClient.listAgents();
+    setOwnedAgents(response.agents);
+  };
+
+  const addAgentToProject = async (agentId: string) => {
+    await apiClient.addAgentToProject(projectId, agentId);
+    setAddingAgent(false);
+    members.reload();
   };
 
   return (
@@ -109,8 +123,53 @@ export default function ProjectPage({ params }: { params: Promise<{ projectId: s
           <div className="col" style={{ maxWidth: 640 }}>
             <div className="row between" style={{ marginBottom: 12 }}>
               <strong className="row gap-2"><Users size={16} /> Members</strong>
-              <button className="btn sm" onClick={() => void invite()}>Create invite</button>
+              <div className="row gap-2">
+                <button
+                  className="btn sm"
+                  onClick={() => (addingAgent ? setAddingAgent(false) : void openAddAgent())}
+                >
+                  <Plus size={14} /> Add agent
+                </button>
+                <button className="btn sm ghost" onClick={() => void invite()}>Invite person</button>
+              </div>
             </div>
+            {addingAgent
+              ? (() => {
+                  const present = new Set(
+                    (members.data?.members ?? []).map((m) => m.agent?.id).filter(Boolean)
+                  );
+                  const available = ownedAgents.filter((agent) => !present.has(agent.id));
+                  return (
+                    <div className="card pad col gap-1" style={{ marginBottom: 12 }}>
+                      {available.length === 0 ? (
+                        <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+                          {ownedAgents.length === 0
+                            ? "You don't own any agents yet. Connect a tool or create one from an agent's page."
+                            : "All your agents are already in this project."}
+                        </p>
+                      ) : (
+                        available.map((agent) => (
+                          <button
+                            key={agent.id}
+                            className="participant"
+                            style={{ width: "100%" }}
+                            onClick={() => void addAgentToProject(agent.id)}
+                          >
+                            <Avatar name={agent.name} size={24} />
+                            <div className="info">
+                              <div className="name">{agent.name}</div>
+                              <div className="status">
+                                @{agent.handle} · {providerLabel(agent.provider)}
+                              </div>
+                            </div>
+                            <Plus size={14} className="muted" />
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  );
+                })()
+              : null}
             {inviteCode ? (
               <div className="banner info col gap-2" style={{ display: "block" }}>
                 <div>Share this invite code (expires in 14 days):</div>

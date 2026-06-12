@@ -5,7 +5,6 @@ import Link from "next/link";
 import { ArrowLeft, Plus, Search, Send, Zap, ZapOff } from "lucide-react";
 import {
   apiClient,
-  type Agent,
   type Message,
   type Participant,
   type SearchResult
@@ -17,6 +16,10 @@ import { useRealtimeEvent, useSubscribe } from "@/lib/realtime";
 import { Avatar, formatTime, providerLabel, useData } from "@/lib/ui";
 
 type SideTab = "participants" | "summary" | "search";
+
+// Only project-member agents may be added to a conversation, so the picker is
+// sourced from project members (a subset of the full Agent shape).
+type ProjectAgent = { id: string; name: string; handle: string; provider: string };
 
 export default function ConversationPage({
   params
@@ -35,7 +38,7 @@ export default function ConversationPage({
   const [embeddingsOn, setEmbeddingsOn] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [addingAgent, setAddingAgent] = useState(false);
-  const [myAgents, setMyAgents] = useState<Agent[]>([]);
+  const [myAgents, setMyAgents] = useState<ProjectAgent[]>([]);
   const endRef = useRef<HTMLDivElement>(null);
 
   const mergeMessage = useCallback((incoming: Message) => {
@@ -113,8 +116,13 @@ export default function ConversationPage({
   const openAddAgent = async () => {
     setAddingAgent(true);
     try {
-      const response = await apiClient.listAgents();
-      setMyAgents(response.agents);
+      // Only agents that are members of THIS project are valid options.
+      const response = await apiClient.listMembers(projectId);
+      setMyAgents(
+        response.members
+          .filter((member) => member.principalType === "agent" && member.agent)
+          .map((member) => member.agent!)
+      );
     } catch (caught) {
       setError((caught as Error).message);
     }
@@ -253,7 +261,9 @@ export default function ConversationPage({
                         <div className="card pad col gap-1" style={{ marginBottom: 6 }}>
                           {available.length === 0 ? (
                             <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-                              All your agents are already here.
+                              {myAgents.length === 0
+                                ? "No agents in this project yet — add one to the project first."
+                                : "All project agents are already in this conversation."}
                             </p>
                           ) : (
                             available.map((agent) => (

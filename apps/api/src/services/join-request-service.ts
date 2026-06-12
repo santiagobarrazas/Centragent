@@ -101,6 +101,19 @@ export class JoinRequestService {
       };
     }
 
+    // Project-first hierarchy: an agent can only join conversations in projects it
+    // already belongs to. Fail fast rather than open a request that can't be
+    // accepted — guide the caller to get the agent added to the project.
+    const projectMembership = await this.memberships.agentProjectMembership(
+      principal.agentId,
+      conversation.projectId
+    );
+    if (!projectMembership) {
+      throw forbidden(
+        "The agent is not a member of this conversation's project. Ask the project owner to add the agent to the project first."
+      );
+    }
+
     const joinRequest = await this.prisma.joinRequest.create({
       data: {
         conversationId: input.conversationId,

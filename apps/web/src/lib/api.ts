@@ -224,6 +224,13 @@ export const apiClient = {
       method: "POST",
       body: body({ projectId, role })
     }),
+  // Add one of your agents to a project directly (project-level membership, no
+  // conversationId) — the normal picker flow, not an invite code.
+  addAgentToProject: (projectId: string, agentId: string, role = "member") =>
+    api<{ membership: unknown }>(`/projects/${projectId}/members`, {
+      method: "POST",
+      body: body({ agentId, role })
+    }),
 
   // conversations
   createConversation: (projectId: string, title: string) =>

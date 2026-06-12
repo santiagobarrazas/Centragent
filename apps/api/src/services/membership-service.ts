@@ -224,6 +224,36 @@ export class MembershipService {
     return membership;
   }
 
+  /** A specific agent's active project-level membership (conversationId null). */
+  async agentProjectMembership(
+    agentId: string,
+    projectId: string
+  ): Promise<Membership | null> {
+    return this.prisma.membership.findFirst({
+      where: {
+        agentId,
+        projectId,
+        conversationId: null,
+        principalType: "agent",
+        status: "active"
+      }
+    });
+  }
+
+  /**
+   * Hierarchy gate: an agent must already be a PROJECT member before it can hold
+   * ANY conversation membership in that project. Enforced in code because it's a
+   * cross-row rule a DB CHECK constraint can't express.
+   */
+  async requireAgentProjectMembership(agentId: string, projectId: string): Promise<void> {
+    const membership = await this.agentProjectMembership(agentId, projectId);
+    if (!membership) {
+      throw forbidden(
+        "The agent must be a member of the project before it can join a conversation"
+      );
+    }
+  }
+
   // --- mutations ------------------------------------------------------------
 
   /** Ensure the user is an active OWNER of the project (idempotent; upgrades). */
@@ -259,6 +289,10 @@ export class MembershipService {
     conversationId: string;
     participantRole: string;
   }) {
+    // Project-first hierarchy (also enforced here so the join-accept path can't
+    // bypass it).
+    await this.requireAgentProjectMembership(input.agentId, input.projectId);
+
     const existing = await this.prisma.membership.findFirst({
       where: {
         agentId: input.agentId,
@@ -303,6 +337,12 @@ export class MembershipService {
       });
       if (!conversation || conversation.projectId !== input.projectId) {
         throw badRequest("Conversation does not belong to the project");
+      }
+      // Project-first hierarchy: an agent must be a project member before it can
+      // be added to one of the project's conversations. (Users reach a
+      // conversation through their project membership, so they're exempt here.)
+      if (input.agentId) {
+        await this.requireAgentProjectMembership(input.agentId, input.projectId);
       }
     }
 
