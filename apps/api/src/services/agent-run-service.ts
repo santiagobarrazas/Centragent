@@ -56,10 +56,17 @@ export class AgentRunService {
       ((triggerMessage?.metadata as { agentChain?: AgentChain } | null)?.agentChain) ??
       freshChain(triggerMessage?.id ?? null);
 
-    // Continuity: resume the agent's most recent tool session in this
+    // Continuity: resume the agent's most recent COMPLETED tool session in this
     // conversation so it keeps thread context (and the tool compacts its own).
+    // Only completed runs hold a session the tool actually persisted — resuming a
+    // failed/cancelled run's id makes the tool abort ("No conversation found").
     const lastSession = await this.prisma.agentRun.findFirst({
-      where: { agentId, conversationId: input.conversationId, sessionId: { not: null } },
+      where: {
+        agentId,
+        conversationId: input.conversationId,
+        sessionId: { not: null },
+        status: "completed"
+      },
       orderBy: { startedAt: "desc" },
       select: { sessionId: true }
     });
@@ -104,7 +111,9 @@ export class AgentRunService {
         status: input.status,
         ...(input.costUsd !== undefined ? { costUsd: new Prisma.Decimal(input.costUsd) } : {}),
         ...(input.turns !== undefined ? { turns: input.turns } : {}),
-        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        // Only a completed run holds a resumable session; never persist the id of
+        // a failed/cancelled run or it poisons the next resume.
+        ...(input.sessionId && input.status === "completed" ? { sessionId: input.sessionId } : {}),
         ...(input.error ? { error: input.error } : {}),
         finishedAt: input.status === "running" ? null : new Date()
       }
