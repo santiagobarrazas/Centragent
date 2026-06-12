@@ -34,6 +34,7 @@ export type Conversation = {
   lastMessageAt: string | null;
   participantCount?: number;
   summaryDocumentId?: string | null;
+  autonomyState?: string;
 };
 
 export type MessageSender =
@@ -70,6 +71,7 @@ export type Agent = {
   lastSeenAt: string | null;
   createdAt: string;
   notesAgentEditable?: boolean;
+  autonomyEnabled?: boolean;
   presence: Presence;
   ownerName?: string;
   isOwnedByYou?: boolean;
@@ -258,7 +260,10 @@ export const apiClient = {
   createAgent: (name: string, provider: string, description?: string) =>
     api<{ agent: Agent }>("/agents", { method: "POST", body: body({ name, provider, description }) }),
   getAgent: (agentId: string) => api<{ agent: Agent }>(`/agents/${agentId}`),
-  updateAgent: (agentId: string, patch: Partial<{ name: string; description: string; notesAgentEditable: boolean }>) =>
+  updateAgent: (
+    agentId: string,
+    patch: Partial<{ name: string; description: string; notesAgentEditable: boolean; autonomyEnabled: boolean }>
+  ) =>
     api<{ agent: Agent }>(`/agents/${agentId}`, { method: "PATCH", body: body(patch) }),
 
   // documents
@@ -279,6 +284,16 @@ export const apiClient = {
   revokeToken: (tokenId: string) => api(`/tokens/${tokenId}`, { method: "DELETE" }),
 
   // join requests
+  // autonomy
+  getGlobalAutonomy: () => api<{ killed: boolean }>("/admin/autonomy"),
+  setGlobalAutonomy: (killed: boolean) =>
+    api(`/admin/autonomy/${killed ? "kill" : "resume"}`, { method: "POST", body: body({}) }),
+  setConversationAutonomy: (conversationId: string, autonomyState: string) =>
+    api<{ autonomyState: string }>(`/conversations/${conversationId}/autonomy`, {
+      method: "PATCH",
+      body: body({ autonomyState })
+    }),
+
   listJoinRequests: () => api<{ joinRequests: JoinRequest[] }>("/join-requests?status=pending"),
   acceptJoinRequest: (id: string) =>
     api(`/join-requests/${id}/accept`, { method: "POST", body: body({}) }),

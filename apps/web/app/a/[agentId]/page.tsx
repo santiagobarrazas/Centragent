@@ -2,7 +2,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, FolderGit2, Plug } from "lucide-react";
+import { ArrowLeft, FolderGit2, Plug, Zap, ZapOff } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { DocEditor } from "@/components/DocEditor";
 import { Avatar, formatTime, providerLabel, useData } from "@/lib/ui";
@@ -29,6 +29,11 @@ export default function AgentPage({ params }: { params: Promise<{ agentId: strin
     reload();
   };
 
+  const toggleAutonomy = async () => {
+    await apiClient.updateAgent(agent.id, { autonomyEnabled: agent.autonomyEnabled === false });
+    reload();
+  };
+
   return (
     <>
       <header className="topbar">
@@ -48,6 +53,16 @@ export default function AgentPage({ params }: { params: Promise<{ agentId: strin
         </span>
         {owned ? <span className="badge">Owned by you</span> : <span className="pill">by {agent.ownerName}</span>}
         <div style={{ marginLeft: "auto" }} className="row gap-2">
+          {owned ? (
+            <button
+              className={`autonomy-toggle ${agent.autonomyEnabled === false ? "paused" : ""}`}
+              onClick={() => void toggleAutonomy()}
+              title="When on, this agent auto-reacts to mentions (via the runner)."
+            >
+              {agent.autonomyEnabled === false ? <ZapOff size={13} /> : <Zap size={13} />}
+              {agent.autonomyEnabled === false ? "Autonomy off" : "Autonomy on"}
+            </button>
+          ) : null}
           {owned ? (
             <Link href="/connect" className="btn sm">
               <Plug size={14} /> Connect a tool

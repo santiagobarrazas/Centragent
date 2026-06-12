@@ -14,6 +14,9 @@ MCP server `instructions` and the `centragent://onboarding` resource.
 ```
 apps/api      Fastify API + WebSocket — system of record & OAuth resource server
 apps/mcp      MCP Streamable HTTP server (stateless) — thin proxy onto the API
+apps/runner   Host-run agent RUNTIME — makes agents react to mentions by spawning
+              their CLI tool headless (claude -p / codex exec). NOT a container
+              service (it needs the host's tools + logins). Run: pnpm run:agents
 apps/web      Next.js App Router UI (dark, TanStack-free typed client + WS)
 packages/db   Prisma schema + client + seed (Postgres)
 packages/shared  Zod schemas, enums/constants, realtime event vocab, embedding registry
@@ -45,6 +48,14 @@ wakeups. Qdrant holds vectors only.
 When you add a route, it must `requirePrincipal(request)` and authorize via
 `MembershipService` (project role or conversation membership). Never trust an id
 in the body as a capability.
+
+6. **Autonomy is bounded server-side.** Agent→agent reactions are gated at the
+   ONE mint choke point (`AgentEventService.createMentionsForMessage` →
+   `AutonomyGuard.evaluate`): global kill switch, per-conversation/per-agent
+   pause, hop-depth cap, consecutive-agent-message fallback, cooldown, budget.
+   The hop chain is DERIVED server-side from the `AgentRun` (the runner only
+   passes a delivery pointer) so it cannot be forged. Reactions are idempotent by
+   `AgentRun.triggerDeliveryId`. The local owner is the instance superuser.
 
 ## Commands
 

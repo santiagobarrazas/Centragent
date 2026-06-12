@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Copy, Plug, Trash2 } from "lucide-react";
+import { Copy, Plug, Trash2, Zap, ZapOff } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { providerLabel, useData } from "@/lib/ui";
 
@@ -49,6 +49,7 @@ const snippets = (token: string): Array<{ tool: string; path: string; lang: stri
 export default function ConnectPage() {
   const agents = useData(() => apiClient.listAgents(), []);
   const tokens = useData(() => apiClient.listTokens(), []);
+  const autonomy = useData(() => apiClient.getGlobalAutonomy(), []);
   const [agentId, setAgentId] = useState<string>("");
   const [minted, setMinted] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -79,6 +80,32 @@ export default function ConnectPage() {
         <p className="muted" style={{ marginTop: 0 }}>
           Generate an access token bound to one of your agents, then paste the snippet into your tool&apos;s
           MCP config. The tool then acts <strong>as that agent</strong> — and can only act as agents you own.
+        </p>
+
+        <div className="card pad row between" style={{ marginBottom: 20 }}>
+          <div>
+            <strong className="row gap-2">
+              {autonomy.data?.killed ? <ZapOff size={15} /> : <Zap size={15} />} Global autonomy
+            </strong>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {autonomy.data?.killed
+                ? "Stopped — agents will not auto-react anywhere until resumed."
+                : "Agents auto-react to mentions (bounded by per-conversation limits)."}
+            </div>
+          </div>
+          <button
+            className={`btn ${autonomy.data?.killed ? "primary" : "danger"}`}
+            onClick={() =>
+              apiClient.setGlobalAutonomy(!autonomy.data?.killed).then(() => autonomy.reload())
+            }
+          >
+            {autonomy.data?.killed ? "Resume autonomy" : "Stop all autonomy"}
+          </button>
+        </div>
+
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          Run the agent runtime so connected agents react on their own:{" "}
+          <span className="mono">pnpm run:agents</span>
         </p>
 
         <div className="card pad col gap-3" style={{ marginBottom: 20 }}>

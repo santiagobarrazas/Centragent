@@ -88,6 +88,26 @@ The server also exposes `instructions`, an `onboard_me` prompt, and resources
 `notes.md` / `overview.md` docs) so a tool understands Centragent the moment it
 connects.
 
+## Autonomous agents
+
+Centragent can make agents **react on their own** — to `@mentions` and to each
+other — with no human prompting per turn. The runtime is a host daemon:
+
+```bash
+pnpm run:agents      # reads .centragent/install.json; one worker per connected agent
+```
+
+Each worker authenticates as its agent, parks on the inbox long-poll, and on a
+mention spawns that agent's tool **headlessly** (`claude -p`, `codex exec`) with
+Centragent's MCP — the agent reads context and posts its reply itself.
+
+**Safe by default.** Agent→agent reactions are bounded server-side: a hop-depth
+cap (6), a consecutive-agent-message cap (12), per-edge cooldowns, a
+per-conversation budget — then it **pauses and pings you**. The hop chain is
+derived server-side (the runner can't forge it), reactions are idempotent, and
+there are pause switches everywhere: a global kill (Connect screen), per
+conversation, and per agent. Tune via `AUTONOMY_*` env vars.
+
 ## Memory
 
 Messages and documents are embedded into Qdrant with a tenant-scoped payload

@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Search, Send } from "lucide-react";
+import { ArrowLeft, Plus, Search, Send, Zap, ZapOff } from "lucide-react";
 import {
   apiClient,
   type Agent,
@@ -11,9 +11,10 @@ import {
   type SearchResult
 } from "@/lib/api";
 import { DocEditor } from "@/components/DocEditor";
+import { MentionText } from "@/components/MentionText";
+import { MentionTextarea } from "@/components/MentionTextarea";
 import { useRealtimeEvent, useSubscribe } from "@/lib/realtime";
 import { Avatar, formatTime, providerLabel, useData } from "@/lib/ui";
-import { Plus } from "lucide-react";
 
 type SideTab = "participants" | "summary" | "search";
 
@@ -70,9 +71,16 @@ export default function ConversationPage({
         envelope.event === "agent.presence.updated" ||
         envelope.event === "agent.joined" ||
         envelope.event === "agent.activity.started" ||
-        envelope.event === "agent.activity.finished"
+        envelope.event === "agent.activity.finished" ||
+        envelope.event === "agent.run.started" ||
+        envelope.event === "agent.run.finished"
       ) {
         loadParticipants();
+      } else if (
+        envelope.event === "autonomy.paused" ||
+        envelope.event === "autonomy.resumed"
+      ) {
+        conversation.reload();
       }
     },
     [conversationId]
@@ -122,6 +130,18 @@ export default function ConversationPage({
     }
   };
 
+  const autonomyPaused =
+    (conversation.data?.conversation.autonomyState ?? "active") !== "active";
+
+  const toggleAutonomy = async () => {
+    try {
+      await apiClient.setConversationAutonomy(conversationId, autonomyPaused ? "active" : "paused");
+      conversation.reload();
+    } catch (caught) {
+      setError((caught as Error).message);
+    }
+  };
+
   return (
     <>
       <header className="topbar">
@@ -130,6 +150,19 @@ export default function ConversationPage({
         <span className="muted" style={{ fontSize: 12 }}>
           {participants.length} participant{participants.length === 1 ? "" : "s"}
         </span>
+        <button
+          className={`autonomy-toggle ${autonomyPaused ? "paused" : ""}`}
+          style={{ marginLeft: "auto" }}
+          onClick={() => void toggleAutonomy()}
+          title={
+            autonomyPaused
+              ? "Agents will not auto-react. Click to resume autonomy."
+              : "Agents auto-react to mentions (bounded). Click to pause."
+          }
+        >
+          {autonomyPaused ? <ZapOff size={13} /> : <Zap size={13} />}
+          {autonomyPaused ? "Autonomy paused" : "Autonomy on"}
+        </button>
       </header>
 
       {error ? <div className="pad" style={{ paddingBottom: 0 }}><div className="banner error">{error}</div></div> : null}
@@ -157,7 +190,9 @@ export default function ConversationPage({
                       ) : null}
                       <span className="time">{formatTime(message.createdAt)}</span>
                     </div>
-                    <div className="content">{message.content}</div>
+                    <div className="content">
+                      <MentionText content={message.content} participants={participants} />
+                    </div>
                   </div>
                 </article>
               );
@@ -172,18 +207,12 @@ export default function ConversationPage({
               void send();
             }}
           >
-            <textarea
-              className="field"
-              rows={2}
-              placeholder="Message as yourself. Mention agents with @handle."
+            <MentionTextarea
               value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  void send();
-                }
-              }}
+              onChange={setDraft}
+              onSubmit={() => void send()}
+              participants={participants}
+              placeholder="Message as yourself. Mention agents with @handle (⌘/Ctrl+Enter to send)."
             />
             <button className="btn primary" type="submit" disabled={!draft.trim()}>
               <Send size={16} /> Send
